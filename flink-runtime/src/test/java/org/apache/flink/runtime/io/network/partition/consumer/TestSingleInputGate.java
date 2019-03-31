@@ -19,20 +19,21 @@
 package org.apache.flink.runtime.io.network.partition.consumer;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
-import org.apache.flink.runtime.io.network.netty.PartitionStateChecker;
+import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
+import org.apache.flink.runtime.taskmanager.NoOpTaskActions;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkElementIndex;
-import static org.mockito.Mockito.mock;
+import java.lang.reflect.Field;
+import java.util.ArrayDeque;
+
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 
 /**
@@ -51,94 +52,59 @@ public class TestSingleInputGate {
 	public TestSingleInputGate(int numberOfInputChannels, boolean initialize) {
 		checkArgument(numberOfInputChannels >= 1);
 
-		this.inputGate = spy(new SingleInputGate(
-				"Test Task Name", new JobID(), new ExecutionAttemptID(), new IntermediateDataSetID(), 0, numberOfInputChannels, mock(PartitionStateChecker.class)));
+		SingleInputGate realGate = new SingleInputGate(
+			"Test Task Name",
+			new JobID(),
+			new IntermediateDataSetID(),
+			ResultPartitionType.PIPELINED,
+			0,
+			numberOfInputChannels,
+			new NoOpTaskActions(),
+			UnregisteredMetricGroups.createUnregisteredTaskMetricGroup().getIOMetricGroup(),
+			true);
+
+		this.inputGate = spy(realGate);
+
+		// Notify about late registrations (added for DataSinkTaskTest#testUnionDataSinkTask).
+		// After merging registerInputOutput and invoke, we have to make sure that the test
+		// notifications happen at the expected time. In real programs, this is guaranteed by
+		// the instantiation and request partition life cycle.
+		try {
+			Field f = realGate.getClass().getDeclaredField("inputChannelsWithData");
+			f.setAccessible(true);
+			final ArrayDeque<InputChannel> notifications = (ArrayDeque<InputChannel>) f.get(realGate);
+
+			doAnswer(new Answer<Void>() {
+				@Override
+				public Void answer(InvocationOnMock invocation) throws Throwable {
+					invocation.callRealMethod();
+
+					synchronized (notifications) {
+						if (!notifications.isEmpty()) {
+							InputGateListener listener = (InputGateListener) invocation.getArguments()[0];
+							listener.notifyInputGateNonEmpty(inputGate);
+						}
+					}
+
+					return null;
+				}
+			}).when(inputGate).registerListener(any(InputGateListener.class));
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
 
 		this.inputChannels = new TestInputChannel[numberOfInputChannels];
 
 		if (initialize) {
 			for (int i = 0; i < numberOfInputChannels; i++) {
 				inputChannels[i] = new TestInputChannel(inputGate, i);
-				inputGate.setInputChannel(new IntermediateResultPartitionID(), inputChannels[i].getInputChannel());
+				inputGate.setInputChannel(new IntermediateResultPartitionID(), inputChannels[i]);
 			}
 		}
-	}
-
-	public TestSingleInputGate read(Buffer buffer, int channelIndex) throws IOException, InterruptedException {
-		checkElementIndex(channelIndex, inputGate.getNumberOfInputChannels());
-
-		inputChannels[channelIndex].read(buffer);
-
-		return this;
-	}
-
-	public TestSingleInputGate readBuffer() throws IOException, InterruptedException {
-		return readBuffer(0);
-	}
-
-	public TestSingleInputGate readBuffer(int channelIndex) throws IOException, InterruptedException {
-		inputChannels[channelIndex].readBuffer();
-
-		return this;
-	}
-
-	public TestSingleInputGate readEvent() throws IOException, InterruptedException {
-		return readEvent(0);
-	}
-
-	public TestSingleInputGate readEvent(int channelIndex) throws IOException, InterruptedException {
-		inputChannels[channelIndex].readEvent();
-
-		return this;
-	}
-
-	public TestSingleInputGate readEndOfSuperstepEvent() throws IOException, InterruptedException {
-		for (TestInputChannel inputChannel : inputChannels) {
-			inputChannel.readEndOfSuperstepEvent();
-		}
-
-		return this;
-	}
-
-	public TestSingleInputGate readEndOfSuperstepEvent(int channelIndex) throws IOException, InterruptedException {
-		inputChannels[channelIndex].readEndOfSuperstepEvent();
-
-		return this;
-	}
-
-	public TestSingleInputGate readEndOfPartitionEvent() throws IOException, InterruptedException {
-		for (TestInputChannel inputChannel : inputChannels) {
-			inputChannel.readEndOfPartitionEvent();
-		}
-
-		return this;
-	}
-
-	public TestSingleInputGate readEndOfPartitionEvent(int channelIndex) throws IOException, InterruptedException {
-		inputChannels[channelIndex].readEndOfPartitionEvent();
-
-		return this;
 	}
 
 	public SingleInputGate getInputGate() {
 		return inputGate;
 	}
 
-	// ------------------------------------------------------------------------
-
-	public List<Integer> readAllChannels() throws IOException, InterruptedException {
-		final List<Integer> readOrder = new ArrayList<Integer>(inputChannels.length);
-
-		for (int i = 0; i < inputChannels.length; i++) {
-			readOrder.add(i);
-		}
-
-		Collections.shuffle(readOrder);
-
-		for (int channelIndex : readOrder) {
-			inputChannels[channelIndex].readBuffer();
-		}
-
-		return readOrder;
-	}
 }

@@ -18,76 +18,71 @@
 
 package org.apache.flink.test.runtime.leaderelection;
 
-import akka.actor.ActorSystem;
-import akka.actor.Kill;
-import akka.actor.PoisonPill;
-import org.apache.flink.configuration.ConfigConstants;
+import org.apache.flink.api.common.time.Deadline;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.ClusterOptions;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.client.JobClient;
-import org.apache.flink.runtime.client.JobExecutionException;
-import org.apache.flink.runtime.instance.ActorGateway;
-import org.apache.flink.runtime.jobgraph.DistributionPattern;
+import org.apache.flink.runtime.dispatcher.Dispatcher;
+import org.apache.flink.runtime.entrypoint.component.DispatcherResourceManagerComponent;
+import org.apache.flink.runtime.execution.Environment;
+import org.apache.flink.runtime.highavailability.HighAvailabilityServices;
 import org.apache.flink.runtime.jobgraph.JobGraph;
+import org.apache.flink.runtime.jobgraph.JobStatus;
 import org.apache.flink.runtime.jobgraph.JobVertex;
-import org.apache.flink.runtime.jobmanager.Tasks;
-import org.apache.flink.runtime.jobmanager.scheduler.SlotSharingGroup;
-import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalException;
+import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.jobmaster.JobResult;
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalService;
-import org.apache.flink.runtime.messages.JobManagerMessages;
-import org.apache.flink.runtime.testingUtils.TestingJobManagerMessages.WaitForAllVerticesToBeRunningOrFinished;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
-import org.apache.flink.runtime.util.LeaderRetrievalUtils;
-import org.apache.flink.test.util.ForkableFlinkMiniCluster;
+import org.apache.flink.runtime.minicluster.TestingMiniCluster;
+import org.apache.flink.runtime.minicluster.TestingMiniClusterConfiguration;
+import org.apache.flink.runtime.testutils.CommonTestUtils;
+import org.apache.flink.runtime.testutils.ZooKeeperTestUtils;
+import org.apache.flink.runtime.webmonitor.retriever.LeaderRetriever;
 import org.apache.flink.util.TestLogger;
+
+import org.apache.curator.test.TestingServer;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.Rule;
 import org.junit.Test;
-import scala.concurrent.Await;
-import scala.concurrent.Future;
-import scala.concurrent.duration.FiniteDuration;
+import org.junit.rules.TemporaryFolder;
 
-import static org.junit.Assert.*;
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
+import java.time.Duration;
+import java.util.Collection;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+
+import static org.hamcrest.Matchers.is;
+import static org.junit.Assert.assertThat;
+
+/**
+ * Test the election of a new JobManager leader.
+ */
 public class ZooKeeperLeaderElectionITCase extends TestLogger {
 
-	private static final FiniteDuration timeout = TestingUtils.TESTING_DURATION();
+	private static final Duration TEST_TIMEOUT = Duration.ofMinutes(5L);
 
-	/**
-	 * Tests that the TaskManagers successfully register at the new leader once the old leader
-	 * is terminated.
-	 */
-	@Test
-	public void testTaskManagerRegistrationAtReelectedLeader() throws Exception {
-		Configuration configuration = new Configuration();
+	private static final Time RPC_TIMEOUT = Time.minutes(1L);
 
-		int numJMs = 10;
-		int numTMs = 3;
+	private static TestingServer zkServer;
 
-		configuration.setString(ConfigConstants.RECOVERY_MODE, "zookeeper");
-		configuration.setInteger(ConfigConstants.LOCAL_NUMBER_JOB_MANAGER, numJMs);
-		configuration.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTMs);
+	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
 
-		ForkableFlinkMiniCluster cluster = new ForkableFlinkMiniCluster(configuration);
+	@BeforeClass
+	public static void setup() throws Exception {
+		zkServer = new TestingServer(true);
+	}
 
-		try {
-			cluster.start();
-
-			for(int i = 0; i < numJMs; i++) {
-				ActorGateway leadingJM = cluster.getLeaderGateway(timeout);
-
-				cluster.waitForTaskManagersToBeRegisteredAtJobManager(leadingJM.actor());
-
-				Future<Object> registeredTMs = leadingJM.ask(
-						JobManagerMessages.getRequestNumberRegisteredTaskManager(),
-						timeout);
-
-				int numRegisteredTMs = (Integer) Await.result(registeredTMs, timeout);
-
-				assertEquals(numTMs, numRegisteredTMs);
-
-				cluster.clearLeader();
-				leadingJM.tell(PoisonPill.getInstance());
-			}
-		} finally {
-			cluster.stop();
+	@AfterClass
+	public static void tearDown() throws Exception {
+		if (zkServer != null) {
+			zkServer.close();
+			zkServer = null;
 		}
 	}
 
@@ -98,157 +93,173 @@ public class ZooKeeperLeaderElectionITCase extends TestLogger {
 	 * successfully executed.
 	 */
 	@Test
-	public void testJobExecutionOnClusterWithLeaderReelection() throws Exception {
-		int numJMs = 10;
-		int numTMs = 3;
-		int numSlotsPerTM = 3;
-		int parallelism = numTMs * numSlotsPerTM;
+	public void testJobExecutionOnClusterWithLeaderChange() throws Exception {
+		final int numDispatchers = 3;
+		final int numTMs = 2;
+		final int numSlotsPerTM = 2;
 
-		Configuration configuration = new Configuration();
+		final Configuration configuration = ZooKeeperTestUtils.createZooKeeperHAConfig(
+			zkServer.getConnectString(),
+			tempFolder.newFolder().getAbsolutePath());
 
-		configuration.setString(ConfigConstants.RECOVERY_MODE, "zookeeper");
-		configuration.setInteger(ConfigConstants.LOCAL_NUMBER_JOB_MANAGER, numJMs);
-		configuration.setInteger(ConfigConstants.LOCAL_NUMBER_TASK_MANAGER, numTMs);
-		configuration.setInteger(ConfigConstants.TASK_MANAGER_NUM_TASK_SLOTS, numSlotsPerTM);
+		// speed up refused registration retries
+		configuration.setLong(ClusterOptions.REFUSED_REGISTRATION_DELAY, 50L);
 
-		Tasks.BlockingOnceReceiver$.MODULE$.blocking_$eq(true);
+		final TestingMiniClusterConfiguration miniClusterConfiguration = new TestingMiniClusterConfiguration.Builder()
+			.setConfiguration(configuration)
+			.setNumberDispatcherResourceManagerComponents(numDispatchers)
+			.setNumTaskManagers(numTMs)
+			.setNumSlotsPerTaskManager(numSlotsPerTM)
+			.build();
 
-		JobVertex sender = new JobVertex("sender");
-		JobVertex receiver = new JobVertex("receiver");
+		LeaderRetrievalService dispatcherLeaderRetriever = null;
 
-		sender.setInvokableClass(Tasks.Sender.class);
-		receiver.setInvokableClass(Tasks.BlockingOnceReceiver.class);
+		try (TestingMiniCluster miniCluster = new TestingMiniCluster(miniClusterConfiguration)) {
+			Deadline timeout = Deadline.fromNow(TEST_TIMEOUT);
+			miniCluster.start();
 
-		sender.setParallelism(parallelism);
-		receiver.setParallelism(parallelism);
+			final int parallelism = numTMs * numSlotsPerTM;
+			JobGraph jobGraph = createJobGraph(parallelism);
 
-		receiver.connectNewDataSetAsInput(sender, DistributionPattern.POINTWISE);
+			miniCluster.submitJob(jobGraph).get();
 
-		SlotSharingGroup slotSharingGroup = new SlotSharingGroup();
-		sender.setSlotSharingGroup(slotSharingGroup);
-		receiver.setSlotSharingGroup(slotSharingGroup);
+			Collection<DispatcherResourceManagerComponent<?>> dispatcherResourceManagerComponents = miniCluster.getDispatcherResourceManagerComponents();
 
-		final JobGraph graph = new JobGraph("Blocking test job", sender, receiver);
+			final NewLeaderRetriever newLeaderRetriever = new NewLeaderRetriever();
+			final HighAvailabilityServices highAvailabilityServices = miniCluster.getHighAvailabilityServices();
+			dispatcherLeaderRetriever = highAvailabilityServices.getDispatcherLeaderRetriever();
+			dispatcherLeaderRetriever.start(newLeaderRetriever);
 
-		final ForkableFlinkMiniCluster cluster = new ForkableFlinkMiniCluster(configuration);
+			for (int i = 0; i < numDispatchers - 1; i++) {
+				final DispatcherResourceManagerComponent<?> leadingDispatcherResourceManagerComponent = getLeadingDispatcherResourceManagerComponent(
+					dispatcherResourceManagerComponents,
+					newLeaderRetriever);
 
-		ActorSystem clientActorSystem = null;
+				final Dispatcher dispatcher = leadingDispatcherResourceManagerComponent.getDispatcher();
 
-		Thread thread = null;
+				CommonTestUtils.waitUntilCondition(() -> dispatcher.requestJobStatus(jobGraph.getJobID(), RPC_TIMEOUT).get() == JobStatus.RUNNING, timeout, 50L);
 
-		JobSubmitterRunnable jobSubmission = null;
-
-		try {
-			cluster.start();
-
-			clientActorSystem = cluster.startJobClientActorSystem(graph.getJobID());
-
-			final ActorSystem clientAS = clientActorSystem;
-
-			jobSubmission = new JobSubmitterRunnable(clientAS, cluster, graph);
-
-			thread = new Thread(jobSubmission);
-
-			thread.start();
-
-			// Kill all JobManager except for two
-			for(int i = 0; i < numJMs - 2; i++) {
-				ActorGateway jm = cluster.getLeaderGateway(timeout);
-
-				cluster.waitForTaskManagersToBeRegisteredAtJobManager(jm.actor());
-
-				Future<Object> future = jm.ask(new WaitForAllVerticesToBeRunningOrFinished(graph.getJobID()), timeout);
-
-				Await.ready(future, timeout);
-
-				cluster.clearLeader();
-
-				jm.tell(Kill.getInstance());
+				leadingDispatcherResourceManagerComponent.closeAsync();
 			}
 
-			ActorGateway jm = cluster.getLeaderGateway(timeout);
+			final DispatcherResourceManagerComponent<?> leadingDispatcherResourceManagerComponent = getLeadingDispatcherResourceManagerComponent(
+				dispatcherResourceManagerComponents,
+				newLeaderRetriever);
 
-			cluster.waitForTaskManagersToBeRegisteredAtJobManager(jm.actor());
+			CompletableFuture<JobResult> jobResultFuture = leadingDispatcherResourceManagerComponent.getDispatcher().requestJobResult(jobGraph.getJobID(), RPC_TIMEOUT);
+			BlockingOperator.unblock();
 
-			Future<Object> future = jm.ask(new WaitForAllVerticesToBeRunningOrFinished(graph.getJobID()), timeout);
-
-			Await.ready(future, timeout);
-
-			cluster.clearLeader();
-
-			// set the BlockinOnceReceiver for the execution on the last JM to non-blocking, so
-			// that it can succeed
-			Tasks.BlockingOnceReceiver$.MODULE$.blocking_$eq(false);
-
-			jm.tell(PoisonPill.getInstance());
-
-			thread.join(timeout.toMillis());
-
-			if(thread.isAlive()) {
-				jobSubmission.finished = true;
-				fail("The job submission thread did not stop (meaning it did not succeeded in" +
-						"executing the test job.");
-			}
+			assertThat(jobResultFuture.get().isSuccess(), is(true));
 		} finally {
-			if (clientActorSystem != null) {
-				cluster.shutdownJobClientActorSystem(clientActorSystem);
+			if (dispatcherLeaderRetriever != null) {
+				dispatcherLeaderRetriever.stop();
 			}
-
-			if(thread != null && thread.isAlive() && jobSubmission != null) {
-				jobSubmission.finished = true;
-			}
-			cluster.stop();
 		}
 	}
 
-	public static class JobSubmitterRunnable implements Runnable {
-		boolean finished = false;
+	@Nonnull
+	protected DispatcherResourceManagerComponent<?> getLeadingDispatcherResourceManagerComponent(
+			Collection<DispatcherResourceManagerComponent<?>> dispatcherResourceManagerComponents,
+			NewLeaderRetriever newLeaderRetriever) throws Exception {
+		final Tuple2<String, UUID> leaderInformation = newLeaderRetriever.waitUntilNewLeader().get();
 
-		final ActorSystem clientActorSystem;
-		final ForkableFlinkMiniCluster cluster;
-		final JobGraph graph;
+		final String leaderAddress = leaderInformation.f0;
 
-		public JobSubmitterRunnable(
-				ActorSystem actorSystem,
-				ForkableFlinkMiniCluster cluster,
-				JobGraph graph) {
-			this.clientActorSystem = actorSystem;
-			this.cluster = cluster;
-			this.graph = graph;
+		return findLeadingDispatcherResourceManagerComponent(
+			dispatcherResourceManagerComponents,
+			leaderAddress).orElseThrow(() -> new Exception(String.format("Could not find the leading Dispatcher with address %s", leaderAddress)));
+	}
+
+	@Nonnull
+	private static Optional<DispatcherResourceManagerComponent<?>> findLeadingDispatcherResourceManagerComponent(Collection<DispatcherResourceManagerComponent<?>> dispatcherResourceManagerComponents, String address) {
+		for (DispatcherResourceManagerComponent<?> dispatcherResourceManagerComponent : dispatcherResourceManagerComponents) {
+			if (dispatcherResourceManagerComponent.getDispatcher().getAddress().equals(address)) {
+				return Optional.of(dispatcherResourceManagerComponent);
+			}
+		}
+
+		return Optional.empty();
+	}
+
+	private static class NewLeaderRetriever extends LeaderRetriever {
+
+		private final Object lock = new Object();
+
+		@Nullable
+		private Tuple2<String, UUID> lastAddress = null;
+
+		private CompletableFuture<Tuple2<String, UUID>> newLeaderFuture = new CompletableFuture<>();
+
+		CompletableFuture<Tuple2<String, UUID>> waitUntilNewLeader() {
+			synchronized (lock) {
+				if (newLeaderFuture.isDone()) {
+					CompletableFuture<Tuple2<String, UUID>> newLeader = newLeaderFuture;
+					newLeaderFuture = new CompletableFuture<>();
+
+					return newLeader;
+				} else {
+					return newLeaderFuture.thenApply(stringUUIDTuple2 -> {
+						synchronized (lock) {
+							newLeaderFuture = new CompletableFuture<>();
+						}
+						return stringUUIDTuple2;
+					});
+				}
+			}
 		}
 
 		@Override
-		public void run() {
-			while(!finished) {
-				try {
-					LeaderRetrievalService lrService =
-							LeaderRetrievalUtils.createLeaderRetrievalService(
-									cluster.configuration());
-
-					ActorGateway jobManagerGateway =
-							LeaderRetrievalUtils.retrieveLeaderGateway(
-									lrService,
-									clientActorSystem,
-									timeout);
-
-					JobClient.submitJobAndWait(
-							clientActorSystem,
-							jobManagerGateway,
-							graph,
-							timeout,
-							false,
-							getClass().getClassLoader());
-
-					finished = true;
-				} catch (JobExecutionException e) {
-					// This was expected, so just try again to submit the job
-				} catch (LeaderRetrievalException e) {
-					// This can also happen, so just try again to submit the job
-				} catch (Exception e) {
-					// This was not expected... fail the test case
-					e.printStackTrace();
-					fail("Caught unexpected exception in job submission test case.");
+		protected void notifyNewLeaderAddress(CompletableFuture<Tuple2<String, UUID>> newLeaderAddressFuture) {
+			newLeaderAddressFuture.whenComplete((newLeaderAddress, throwable) -> {
+				synchronized (lock) {
+					if (throwable != null) {
+						newLeaderFuture.completeExceptionally(throwable);
+					} else if (!newLeaderAddress.equals(lastAddress)) {
+						lastAddress = newLeaderAddress;
+						if (newLeaderFuture.isDone()) {
+							newLeaderFuture = CompletableFuture.completedFuture(newLeaderAddress);
+						} else {
+							newLeaderFuture.complete(newLeaderAddress);
+						}
+					}
 				}
+			});
+		}
+	}
+
+	private JobGraph createJobGraph(int parallelism) {
+		BlockingOperator.isBlocking = true;
+		final JobVertex vertex = new JobVertex("blocking operator");
+		vertex.setParallelism(parallelism);
+		vertex.setInvokableClass(BlockingOperator.class);
+
+		return new JobGraph("Blocking test job", vertex);
+	}
+
+	/**
+	 * Blocking invokable which is controlled by a static field.
+	 */
+	public static class BlockingOperator extends AbstractInvokable {
+		private static final Object lock = new Object();
+		private static volatile boolean isBlocking = true;
+
+		public BlockingOperator(Environment environment) {
+			super(environment);
+		}
+
+		@Override
+		public void invoke() throws Exception {
+			synchronized (lock) {
+				while (isBlocking) {
+					lock.wait();
+				}
+			}
+		}
+
+		public static void unblock() {
+			synchronized (lock) {
+				isBlocking = false;
+				lock.notifyAll();
 			}
 		}
 	}

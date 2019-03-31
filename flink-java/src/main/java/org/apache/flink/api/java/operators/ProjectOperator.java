@@ -18,8 +18,9 @@
 
 package org.apache.flink.api.java.operators;
 
-import java.util.Arrays;
-
+import org.apache.flink.annotation.Internal;
+import org.apache.flink.annotation.Public;
+import org.apache.flink.annotation.PublicEvolving;
 import org.apache.flink.api.common.InvalidProgramException;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.operators.Operator;
@@ -28,44 +29,58 @@ import org.apache.flink.api.common.typeutils.CompositeType;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.functions.SemanticPropUtil;
 import org.apache.flink.api.java.operators.translation.PlanProjectOperator;
+import org.apache.flink.api.java.tuple.Tuple;
+import org.apache.flink.api.java.tuple.Tuple1;
+import org.apache.flink.api.java.tuple.Tuple10;
+import org.apache.flink.api.java.tuple.Tuple11;
+import org.apache.flink.api.java.tuple.Tuple12;
+import org.apache.flink.api.java.tuple.Tuple13;
+import org.apache.flink.api.java.tuple.Tuple14;
+import org.apache.flink.api.java.tuple.Tuple15;
+import org.apache.flink.api.java.tuple.Tuple16;
+import org.apache.flink.api.java.tuple.Tuple17;
+import org.apache.flink.api.java.tuple.Tuple18;
+import org.apache.flink.api.java.tuple.Tuple19;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.api.java.tuple.Tuple20;
+import org.apache.flink.api.java.tuple.Tuple21;
+import org.apache.flink.api.java.tuple.Tuple22;
+import org.apache.flink.api.java.tuple.Tuple23;
+import org.apache.flink.api.java.tuple.Tuple24;
+import org.apache.flink.api.java.tuple.Tuple25;
+import org.apache.flink.api.java.tuple.Tuple3;
+import org.apache.flink.api.java.tuple.Tuple4;
+import org.apache.flink.api.java.tuple.Tuple5;
+import org.apache.flink.api.java.tuple.Tuple6;
+import org.apache.flink.api.java.tuple.Tuple7;
+import org.apache.flink.api.java.tuple.Tuple8;
+import org.apache.flink.api.java.tuple.Tuple9;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
+import org.apache.flink.util.Preconditions;
 
-//CHECKSTYLE.OFF: AvoidStarImport - Needed for TupleGenerator
-import org.apache.flink.api.java.tuple.*;
-//CHECKSTYLE.ON: AvoidStarImport
-
-import com.google.common.base.Preconditions;
+import java.util.Arrays;
 
 /**
  * This operator represents the application of a projection operation on a data set, and the
  * result data set produced by the function.
- * 
+ *
  * @param <IN> The type of the data set projected by the operator.
  * @param <OUT> The type of data set that is the result of the projection.
  */
-public class ProjectOperator<IN, OUT extends Tuple> 
+@Public
+public class ProjectOperator<IN, OUT extends Tuple>
 	extends SingleInputOperator<IN, OUT, ProjectOperator<IN, OUT>> {
-	
+
 	protected final int[] fields;
-	
-	private Projection<IN> proj;
 
 	public ProjectOperator(DataSet<IN> input, int[] fields, TupleTypeInfo<OUT> returnType) {
 		super(input, returnType);
-	
+
 		this.fields = fields;
-		proj = null;
-	}
-	
-	public ProjectOperator(DataSet<IN> input, int[] fields, TupleTypeInfo<OUT> returnType, Projection<IN> proj) {
-		super(input, returnType);
-	
-		this.fields = fields;
-		this.proj = proj;
 	}
 
 	@Override
-	protected org.apache.flink.api.common.operators.base.MapOperatorBase<IN, OUT, MapFunction<IN,OUT>> translateToDataFlow(Operator<IN> input) {
+	protected org.apache.flink.api.common.operators.base.MapOperatorBase<IN, OUT, MapFunction<IN, OUT>> translateToDataFlow(Operator<IN> input) {
 		String name = getName() != null ? getName() : "Projection " + Arrays.toString(fields);
 		// create operator
 		PlanProjectOperator<IN, OUT> ppo = new PlanProjectOperator<IN, OUT>(fields, name, getInputType(), getResultType(), context.getConfig());
@@ -79,108 +94,70 @@ public class ProjectOperator<IN, OUT extends Tuple>
 	}
 
 	/**
-	 * Continues a Project transformation on a {@link Tuple} {@link DataSet}.<br/>
-	 * <b>Note: Only Tuple DataSets can be projected using field indexes.</b></br>
-	 * The transformation projects each Tuple of the DataSet onto a (sub)set of fields.</br>
-	 * Additional fields can be added to the projection by calling this method repeatedly.
-	 *
-	 * <b>Note: With the current implementation, the Project transformation looses type information.</b>
-	 *
-	 * @param fieldIndexes The field indexes which are added to the Project transformation.
-	 * 					   The order of fields in the output tuple corresponds to the order of field indexes.
-	 * @return A ProjectOperator that represents the projected DataSet.
-	 *
-	 * @see Tuple
-	 * @see DataSet
-	 * @see ProjectOperator
-	 */
-	public <R extends Tuple> ProjectOperator<?, R> project(int... fieldIndexes) {
-		proj.acceptAdditionalIndexes(fieldIndexes);
-		
-		return proj.projectTupleX();
-	}
-	/**
-	 * Deprecated method only kept for compatibility.
+	 * @deprecated Deprecated method only kept for compatibility.
 	 */
 	@SuppressWarnings("unchecked")
 	@Deprecated
+	@PublicEvolving
 	public <R extends Tuple> ProjectOperator<IN, R> types(Class<?>... types) {
-		TupleTypeInfo<R> typeInfo = (TupleTypeInfo<R>)this.getResultType();
+		TupleTypeInfo<R> typeInfo = (TupleTypeInfo<R>) this.getResultType();
 
-		if(types.length != typeInfo.getArity()) {
+		if (types.length != typeInfo.getArity()) {
 			throw new InvalidProgramException("Provided types do not match projection.");
 		}
-		for (int i=0; i<types.length; i++) {
+		for (int i = 0; i < types.length; i++) {
 			Class<?> typeClass = types[i];
 			if (!typeClass.equals(typeInfo.getTypeAt(i).getTypeClass())) {
-				throw new InvalidProgramException("Provided type "+typeClass.getSimpleName()+" at position "+i+" does not match projection");
+				throw new InvalidProgramException("Provided type " + typeClass.getSimpleName() + " at position " + i + " does not match projection");
 			}
 		}
 		return (ProjectOperator<IN, R>) this;
 	}
-	
+
+	/**
+	 * A projection of {@link DataSet}.
+	 *
+	 * @param <T>
+	 */
+	@Internal
 	public static class Projection<T> {
-		
+
 		private final DataSet<T> ds;
 		private int[] fieldIndexes;
-		
+
 		public Projection(DataSet<T> ds, int[] fieldIndexes) {
-			
-			if(!(ds.getType() instanceof TupleTypeInfo)) {
+
+			if (!(ds.getType() instanceof TupleTypeInfo)) {
 				throw new UnsupportedOperationException("project() can only be applied to DataSets of Tuples.");
 			}
-			
-			if(fieldIndexes.length == 0) {
+
+			if (fieldIndexes.length == 0) {
 				throw new IllegalArgumentException("project() needs to select at least one (1) field.");
-			} else if(fieldIndexes.length > Tuple.MAX_ARITY - 1) {
+			} else if (fieldIndexes.length > Tuple.MAX_ARITY - 1) {
 				throw new IllegalArgumentException(
-						"project() may select only up to (" + (Tuple.MAX_ARITY - 1) + ") fields.");
+					"project() may select only up to (" + (Tuple.MAX_ARITY - 1) + ") fields.");
 			}
-			
+
 			int maxFieldIndex = ds.getType().getArity();
 			for (int fieldIndexe : fieldIndexes) {
 				Preconditions.checkElementIndex(fieldIndexe, maxFieldIndex);
 			}
-			
+
 			this.ds = ds;
 			this.fieldIndexes = fieldIndexes;
 		}
-		
-		private void acceptAdditionalIndexes(int... additionalIndexes) {
-			
-			if(additionalIndexes.length == 0) {
-				throw new IllegalArgumentException("project() needs to select at least one (1) field.");
-			} else if(additionalIndexes.length > Tuple.MAX_ARITY - 1) {
-				throw new IllegalArgumentException(
-						"project() may select only up to (" + (Tuple.MAX_ARITY - 1) + ") fields.");
-			}
-			
-			int offset = this.fieldIndexes.length;
-			
-			this.fieldIndexes = Arrays.copyOf(this.fieldIndexes, this.fieldIndexes.length + additionalIndexes.length);
-			
-			int maxFieldIndex = ds.getType().getArity();
-			for (int i = 0; i < additionalIndexes.length; i++) {
-				Preconditions.checkElementIndex(additionalIndexes[i], maxFieldIndex);
 
-				this.fieldIndexes[offset + i] = additionalIndexes[i];
-			}
-		}
-		
-		
-		
-		// --------------------------------------------------------------------------------------------	
+		// --------------------------------------------------------------------------------------------
 		// The following lines are generated.
-		// --------------------------------------------------------------------------------------------	
-		// BEGIN_OF_TUPLE_DEPENDENT_CODE	
-	// GENERATED FROM org.apache.flink.api.java.tuple.TupleGenerator.
+		// --------------------------------------------------------------------------------------------
+		// BEGIN_OF_TUPLE_DEPENDENT_CODE
+		// GENERATED FROM org.apache.flink.api.java.tuple.TupleGenerator.
 
 		/**
 		 * Chooses a projectTupleX according to the length of
-		 * {@link org.apache.flink.api.java.operators.ProjectOperator.Projection#fieldIndexes} 
-		 * 
+		 * {@link org.apache.flink.api.java.operators.ProjectOperator.Projection#fieldIndexes}.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see org.apache.flink.api.java.operators.ProjectOperator.Projection
 		 */
 		@SuppressWarnings("unchecked")
@@ -220,10 +197,9 @@ public class ProjectOperator<IN, OUT extends Tuple>
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -231,14 +207,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple1<T0>> tType = new TupleTypeInfo<Tuple1<T0>>(fTypes);
 
-			return new ProjectOperator<T, Tuple1<T0>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple1<T0>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -246,14 +221,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple2<T0, T1>> tType = new TupleTypeInfo<Tuple2<T0, T1>>(fTypes);
 
-			return new ProjectOperator<T, Tuple2<T0, T1>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple2<T0, T1>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -261,14 +235,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple3<T0, T1, T2>> tType = new TupleTypeInfo<Tuple3<T0, T1, T2>>(fTypes);
 
-			return new ProjectOperator<T, Tuple3<T0, T1, T2>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple3<T0, T1, T2>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -276,14 +249,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple4<T0, T1, T2, T3>> tType = new TupleTypeInfo<Tuple4<T0, T1, T2, T3>>(fTypes);
 
-			return new ProjectOperator<T, Tuple4<T0, T1, T2, T3>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple4<T0, T1, T2, T3>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -291,14 +263,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple5<T0, T1, T2, T3, T4>> tType = new TupleTypeInfo<Tuple5<T0, T1, T2, T3, T4>>(fTypes);
 
-			return new ProjectOperator<T, Tuple5<T0, T1, T2, T3, T4>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple5<T0, T1, T2, T3, T4>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -306,14 +277,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple6<T0, T1, T2, T3, T4, T5>> tType = new TupleTypeInfo<Tuple6<T0, T1, T2, T3, T4, T5>>(fTypes);
 
-			return new ProjectOperator<T, Tuple6<T0, T1, T2, T3, T4, T5>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple6<T0, T1, T2, T3, T4, T5>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -321,14 +291,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple7<T0, T1, T2, T3, T4, T5, T6>> tType = new TupleTypeInfo<Tuple7<T0, T1, T2, T3, T4, T5, T6>>(fTypes);
 
-			return new ProjectOperator<T, Tuple7<T0, T1, T2, T3, T4, T5, T6>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple7<T0, T1, T2, T3, T4, T5, T6>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -336,14 +305,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple8<T0, T1, T2, T3, T4, T5, T6, T7>> tType = new TupleTypeInfo<Tuple8<T0, T1, T2, T3, T4, T5, T6, T7>>(fTypes);
 
-			return new ProjectOperator<T, Tuple8<T0, T1, T2, T3, T4, T5, T6, T7>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple8<T0, T1, T2, T3, T4, T5, T6, T7>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -351,14 +319,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple9<T0, T1, T2, T3, T4, T5, T6, T7, T8>> tType = new TupleTypeInfo<Tuple9<T0, T1, T2, T3, T4, T5, T6, T7, T8>>(fTypes);
 
-			return new ProjectOperator<T, Tuple9<T0, T1, T2, T3, T4, T5, T6, T7, T8>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple9<T0, T1, T2, T3, T4, T5, T6, T7, T8>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -366,14 +333,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple10<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>> tType = new TupleTypeInfo<Tuple10<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>>(fTypes);
 
-			return new ProjectOperator<T, Tuple10<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple10<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -381,14 +347,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple11<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>> tType = new TupleTypeInfo<Tuple11<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>>(fTypes);
 
-			return new ProjectOperator<T, Tuple11<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple11<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -396,14 +361,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple12<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>> tType = new TupleTypeInfo<Tuple12<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>>(fTypes);
 
-			return new ProjectOperator<T, Tuple12<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple12<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -411,14 +375,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple13<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>> tType = new TupleTypeInfo<Tuple13<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>>(fTypes);
 
-			return new ProjectOperator<T, Tuple13<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple13<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -426,14 +389,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple14<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>> tType = new TupleTypeInfo<Tuple14<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>>(fTypes);
 
-			return new ProjectOperator<T, Tuple14<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple14<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -441,14 +403,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple15<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>> tType = new TupleTypeInfo<Tuple15<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>>(fTypes);
 
-			return new ProjectOperator<T, Tuple15<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple15<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -456,14 +417,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple16<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>> tType = new TupleTypeInfo<Tuple16<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>>(fTypes);
 
-			return new ProjectOperator<T, Tuple16<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple16<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -471,14 +431,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple17<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>> tType = new TupleTypeInfo<Tuple17<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>>(fTypes);
 
-			return new ProjectOperator<T, Tuple17<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple17<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -486,14 +445,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple18<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17>> tType = new TupleTypeInfo<Tuple18<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17>>(fTypes);
 
-			return new ProjectOperator<T, Tuple18<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple18<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -501,14 +459,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple19<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18>> tType = new TupleTypeInfo<Tuple19<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18>>(fTypes);
 
-			return new ProjectOperator<T, Tuple19<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple19<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -516,14 +473,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple20<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19>> tType = new TupleTypeInfo<Tuple20<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19>>(fTypes);
 
-			return new ProjectOperator<T, Tuple20<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple20<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -531,14 +487,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple21<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20>> tType = new TupleTypeInfo<Tuple21<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20>>(fTypes);
 
-			return new ProjectOperator<T, Tuple21<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple21<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -546,14 +501,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple22<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21>> tType = new TupleTypeInfo<Tuple22<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21>>(fTypes);
 
-			return new ProjectOperator<T, Tuple22<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple22<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -561,14 +515,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple23<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22>> tType = new TupleTypeInfo<Tuple23<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22>>(fTypes);
 
-			return new ProjectOperator<T, Tuple23<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple23<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -576,14 +529,13 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple24<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23>> tType = new TupleTypeInfo<Tuple24<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23>>(fTypes);
 
-			return new ProjectOperator<T, Tuple24<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple24<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		/**
-		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields. 
-		 * 
+		 * Projects a {@link Tuple} {@link DataSet} to the previously selected fields.
+		 *
 		 * @return The projected DataSet.
-		 * 
 		 * @see Tuple
 		 * @see DataSet
 		 */
@@ -591,25 +543,23 @@ public class ProjectOperator<IN, OUT extends Tuple>
 			TypeInformation<?>[] fTypes = extractFieldTypes(fieldIndexes, ds.getType());
 			TupleTypeInfo<Tuple25<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24>> tType = new TupleTypeInfo<Tuple25<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24>>(fTypes);
 
-			return new ProjectOperator<T, Tuple25<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24>>(this.ds, this.fieldIndexes, tType, this);
+			return new ProjectOperator<T, Tuple25<T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24>>(this.ds, this.fieldIndexes, tType);
 		}
 
 		// END_OF_TUPLE_DEPENDENT_CODE
 		// -----------------------------------------------------------------------------------------
-		
-		
-		
+
 		private TypeInformation<?>[] extractFieldTypes(int[] fields, TypeInformation<?> inType) {
-			
+
 			TupleTypeInfo<?> inTupleType = (TupleTypeInfo<?>) inType;
 			TypeInformation<?>[] fieldTypes = new TypeInformation[fields.length];
-					
-			for(int i=0; i<fields.length; i++) {					
+
+			for (int i = 0; i < fields.length; i++) {
 				fieldTypes[i] = inTupleType.getTypeAt(fields[i]);
 			}
-			
+
 			return fieldTypes;
 		}
-		
+
 	}
 }

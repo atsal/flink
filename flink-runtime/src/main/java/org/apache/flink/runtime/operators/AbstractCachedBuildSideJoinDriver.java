@@ -24,17 +24,20 @@ import org.apache.flink.api.common.functions.FlatJoinFunction;
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypePairComparatorFactory;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
-import org.apache.flink.configuration.ConfigConstants;
-import org.apache.flink.runtime.operators.hash.NonReusingBuildFirstReOpenableHashMatchIterator;
-import org.apache.flink.runtime.operators.hash.NonReusingBuildSecondReOpenableHashMatchIterator;
-import org.apache.flink.runtime.operators.hash.ReusingBuildFirstReOpenableHashMatchIterator;
-import org.apache.flink.runtime.operators.hash.ReusingBuildSecondReOpenableHashMatchIterator;
+import org.apache.flink.configuration.AlgorithmOptions;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.runtime.operators.hash.NonReusingBuildFirstReOpenableHashJoinIterator;
+import org.apache.flink.runtime.operators.hash.NonReusingBuildSecondReOpenableHashJoinIterator;
+import org.apache.flink.runtime.operators.hash.ReusingBuildFirstReOpenableHashJoinIterator;
+import org.apache.flink.runtime.operators.hash.ReusingBuildSecondReOpenableHashJoinIterator;
 import org.apache.flink.runtime.operators.util.JoinTaskIterator;
 import org.apache.flink.runtime.operators.util.TaskConfig;
+import org.apache.flink.runtime.operators.util.metrics.CountingCollector;
+import org.apache.flink.runtime.operators.util.metrics.CountingMutableObjectIterator;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
 
-public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends JoinDriver<IT1, IT2, OT> implements ResettablePactDriver<FlatJoinFunction<IT1, IT2, OT>, OT> {
+public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends JoinDriver<IT1, IT2, OT> implements ResettableDriver<FlatJoinFunction<IT1, IT2, OT>, OT> {
 
 	private volatile JoinTaskIterator<IT1, IT2, OT> matchIterator;
 	
@@ -63,21 +66,22 @@ public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends Jo
 	@Override
 	public void initialize() throws Exception {
 		TaskConfig config = this.taskContext.getTaskConfig();
+
+		final Counter numRecordsIn = taskContext.getMetricGroup().getIOMetricGroup().getNumRecordsInCounter();
 		
 		TypeSerializer<IT1> serializer1 = this.taskContext.<IT1>getInputSerializer(0).getSerializer();
 		TypeSerializer<IT2> serializer2 = this.taskContext.<IT2>getInputSerializer(1).getSerializer();
 		TypeComparator<IT1> comparator1 = this.taskContext.getDriverComparator(0);
 		TypeComparator<IT2> comparator2 = this.taskContext.getDriverComparator(1);
-		MutableObjectIterator<IT1> input1 = this.taskContext.getInput(0);
-		MutableObjectIterator<IT2> input2 = this.taskContext.getInput(1);
+		MutableObjectIterator<IT1> input1 = new CountingMutableObjectIterator<>(this.taskContext.<IT1>getInput(0), numRecordsIn);
+		MutableObjectIterator<IT2> input2 = new CountingMutableObjectIterator<>(this.taskContext.<IT2>getInput(1), numRecordsIn);
 
 		TypePairComparatorFactory<IT1, IT2> pairComparatorFactory = 
 				this.taskContext.getTaskConfig().getPairComparatorFactory(this.taskContext.getUserCodeClassLoader());
 
 		double availableMemory = config.getRelativeMemoryDriver();
-		boolean hashJoinUseBitMaps = taskContext.getTaskManagerInfo().getConfiguration().getBoolean(
-				ConfigConstants.RUNTIME_HASH_JOIN_BLOOM_FILTERS_KEY,
-				ConfigConstants.DEFAULT_RUNTIME_HASH_JOIN_BLOOM_FILTERS);
+		boolean hashJoinUseBitMaps = taskContext.getTaskManagerInfo().getConfiguration()
+			.getBoolean(AlgorithmOptions.HASH_JOIN_BLOOM_FILTERS);
 		
 		ExecutionConfig executionConfig = taskContext.getExecutionConfig();
 		objectReuseEnabled = executionConfig.isObjectReuseEnabled();
@@ -85,29 +89,33 @@ public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends Jo
 		if (objectReuseEnabled) {
 			if (buildSideIndex == 0 && probeSideIndex == 1) {
 
-				matchIterator = new ReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT>(
+				matchIterator = new ReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT>(
 						input1, input2,
 						serializer1, comparator1,
 						serializer2, comparator2,
 						pairComparatorFactory.createComparator21(comparator1, comparator2),
 						this.taskContext.getMemoryManager(),
 						this.taskContext.getIOManager(),
-						this.taskContext.getOwningNepheleTask(),
+						this.taskContext.getContainingTask(),
 						availableMemory,
+						false,
+						false,
 						hashJoinUseBitMaps);
 
 
 			} else if (buildSideIndex == 1 && probeSideIndex == 0) {
 
-				matchIterator = new ReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT>(
+				matchIterator = new ReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT>(
 						input1, input2,
 						serializer1, comparator1,
 						serializer2, comparator2,
 						pairComparatorFactory.createComparator12(comparator1, comparator2),
 						this.taskContext.getMemoryManager(),
 						this.taskContext.getIOManager(),
-						this.taskContext.getOwningNepheleTask(),
+						this.taskContext.getContainingTask(),
 						availableMemory,
+						false,
+						false,
 						hashJoinUseBitMaps);
 
 			} else {
@@ -116,29 +124,33 @@ public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends Jo
 		} else {
 			if (buildSideIndex == 0 && probeSideIndex == 1) {
 
-				matchIterator = new NonReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT>(
+				matchIterator = new NonReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT>(
 						input1, input2,
 						serializer1, comparator1,
 						serializer2, comparator2,
 						pairComparatorFactory.createComparator21(comparator1, comparator2),
 						this.taskContext.getMemoryManager(),
 						this.taskContext.getIOManager(),
-						this.taskContext.getOwningNepheleTask(),
+						this.taskContext.getContainingTask(),
 						availableMemory,
+						false,
+						false,
 						hashJoinUseBitMaps);
 
 
 			} else if (buildSideIndex == 1 && probeSideIndex == 0) {
 
-				matchIterator = new NonReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT>(
+				matchIterator = new NonReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT>(
 						input1, input2,
 						serializer1, comparator1,
 						serializer2, comparator2,
 						pairComparatorFactory.createComparator12(comparator1, comparator2),
 						this.taskContext.getMemoryManager(),
 						this.taskContext.getIOManager(),
-						this.taskContext.getOwningNepheleTask(),
+						this.taskContext.getContainingTask(),
 						availableMemory,
+						false,
+						false,
 						hashJoinUseBitMaps);
 
 			} else {
@@ -156,10 +168,12 @@ public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends Jo
 
 	@Override
 	public void run() throws Exception {
+		final Counter numRecordsOut = taskContext.getMetricGroup().getIOMetricGroup().getNumRecordsOutCounter();
 		final FlatJoinFunction<IT1, IT2, OT> matchStub = this.taskContext.getStub();
-		final Collector<OT> collector = this.taskContext.getOutputCollector();
+		final Collector<OT> collector = new CountingCollector<>(this.taskContext.getOutputCollector(), numRecordsOut);
 		
-		while (this.running && matchIterator != null && matchIterator.callWithNextKey(matchStub, collector));
+		while (this.running && matchIterator != null && matchIterator.callWithNextKey(matchStub, collector)) {
+		}
 	}
 
 	@Override
@@ -173,20 +187,20 @@ public abstract class AbstractCachedBuildSideJoinDriver<IT1, IT2, OT> extends Jo
 
 		if (objectReuseEnabled) {
 			if (buildSideIndex == 0 && probeSideIndex == 1) {
-				final ReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT> matchIterator = (ReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT>) this.matchIterator;
+				final ReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT> matchIterator = (ReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT>) this.matchIterator;
 
 				matchIterator.reopenProbe(input2);
 			} else {
-				final ReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT> matchIterator = (ReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT>) this.matchIterator;
+				final ReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT> matchIterator = (ReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT>) this.matchIterator;
 				matchIterator.reopenProbe(input1);
 			}
 		} else {
 			if (buildSideIndex == 0 && probeSideIndex == 1) {
-				final NonReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT> matchIterator = (NonReusingBuildFirstReOpenableHashMatchIterator<IT1, IT2, OT>) this.matchIterator;
+				final NonReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT> matchIterator = (NonReusingBuildFirstReOpenableHashJoinIterator<IT1, IT2, OT>) this.matchIterator;
 
 				matchIterator.reopenProbe(input2);
 			} else {
-				final NonReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT> matchIterator = (NonReusingBuildSecondReOpenableHashMatchIterator<IT1, IT2, OT>) this.matchIterator;
+				final NonReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT> matchIterator = (NonReusingBuildSecondReOpenableHashJoinIterator<IT1, IT2, OT>) this.matchIterator;
 				matchIterator.reopenProbe(input1);
 			}
 		}

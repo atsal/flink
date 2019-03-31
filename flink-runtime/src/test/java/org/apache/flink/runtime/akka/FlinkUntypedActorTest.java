@@ -18,15 +18,18 @@
 
 package org.apache.flink.runtime.akka;
 
+import org.apache.flink.runtime.messages.JobManagerMessages;
+import org.apache.flink.runtime.messages.RequiresLeaderSessionID;
+import org.apache.flink.runtime.testingUtils.TestingUtils;
+import org.apache.flink.util.TestLogger;
+
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
 import akka.actor.Kill;
 import akka.actor.Props;
+import akka.actor.RobustActorSystem;
 import akka.testkit.JavaTestKit;
 import akka.testkit.TestActorRef;
-import org.apache.flink.runtime.messages.JobManagerMessages;
-import org.apache.flink.runtime.messages.RequiresLeaderSessionID;
-import org.apache.flink.runtime.testingUtils.TestingUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -36,13 +39,16 @@ import java.util.UUID;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
-public class FlinkUntypedActorTest {
+/**
+ * Tests for {@link FlinkUntypedActor}.
+ */
+public class FlinkUntypedActorTest extends TestLogger {
 
 	private static ActorSystem actorSystem;
 
 	@BeforeClass
 	public static void setup() {
-		actorSystem = ActorSystem.create("TestingActorSystem", TestingUtils.testConfig());
+		actorSystem = RobustActorSystem.create("TestingActorSystem", TestingUtils.testConfig());
 	}
 
 	@AfterClass
@@ -89,7 +95,7 @@ public class FlinkUntypedActorTest {
 
 		TestActorRef<PlainFlinkUntypedActor> actor = null;
 
-		try{
+		try {
 			final Props props = Props.create(PlainFlinkUntypedActor.class, leaderSessionID);
 			actor = TestActorRef.create(actorSystem, props);
 
@@ -113,7 +119,7 @@ public class FlinkUntypedActorTest {
 	}
 
 	private static void stopActor(ActorRef actor) {
-		if(actor != null) {
+		if (actor != null) {
 			actor.tell(Kill.getInstance(), ActorRef.noSender());
 		}
 	}

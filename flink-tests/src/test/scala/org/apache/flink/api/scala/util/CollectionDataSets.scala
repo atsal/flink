@@ -17,12 +17,10 @@
  */
 package org.apache.flink.api.scala.util
 
+import org.apache.flink.api.scala._
 import org.apache.hadoop.io.IntWritable
 
-import org.apache.flink.api.scala._
-
 import scala.collection.mutable
-import scala.reflect.classTag
 import scala.util.Random
 
 /**
@@ -57,7 +55,6 @@ object CollectionDataSets {
     data.+=((19, 6L, "Comment#13"))
     data.+=((20, 6L, "Comment#14"))
     data.+=((21, 6L, "Comment#15"))
-    Random.shuffle(data)
     env.fromCollection(Random.shuffle(data))
   }
 
@@ -268,6 +265,19 @@ object CollectionDataSets {
       2,
       new CrazyNested("two", "duo", 2L),
       new POJO(1, "First", 10, 100, 1000L, "One", 10000L)))
+    env.fromCollection(data)
+  }
+
+  def getMixedPojoDataSet(env: ExecutionEnvironment): DataSet[POJO] = {
+    val data = new mutable.MutableList[POJO]
+    data.+=(new POJO(1, "First", 10, 100, 1000L, "One", 10100L))
+    data.+=(new POJO(2, "First_", 10, 105, 1000L, "One", 10200L))
+    data.+=(new POJO(3, "First", 11, 102, 3000L, "One", 10200L))
+    data.+=(new POJO(4, "First_", 11, 106, 1000L, "One", 10300L))
+    data.+=(new POJO(5, "First", 11, 102, 2000L, "One", 10100L))
+    data.+=(new POJO(6, "Second_", 20, 200, 2000L, "Two", 10100L))
+    data.+=(new POJO(7, "Third", 31, 301, 2000L, "Three", 10200L))
+    data.+=(new POJO(8, "Third_", 30, 300, 1000L, "Three", 10100L))
     env.fromCollection(data)
   }
 

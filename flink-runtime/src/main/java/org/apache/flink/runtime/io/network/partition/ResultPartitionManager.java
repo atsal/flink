@@ -18,19 +18,20 @@
 
 package org.apache.flink.runtime.io.network.partition;
 
-import com.google.common.collect.HashBasedTable;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Table;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
-import org.apache.flink.runtime.io.network.buffer.BufferProvider;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
+
+import org.apache.flink.shaded.guava18.com.google.common.collect.HashBasedTable;
+import org.apache.flink.shaded.guava18.com.google.common.collect.ImmutableList;
+import org.apache.flink.shaded.guava18.com.google.common.collect.Table;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkState;
+import static org.apache.flink.util.Preconditions.checkState;
 
 /**
  * The result partition manager keeps track of all currently produced/consumed partitions of a
@@ -66,7 +67,7 @@ public class ResultPartitionManager implements ResultPartitionProvider {
 	public ResultSubpartitionView createSubpartitionView(
 			ResultPartitionID partitionId,
 			int subpartitionIndex,
-			BufferProvider bufferProvider) throws IOException {
+			BufferAvailabilityListener availabilityListener) throws IOException {
 
 		synchronized (registeredPartitions) {
 			final ResultPartition partition = registeredPartitions.get(partitionId.getProducerId(),
@@ -78,7 +79,7 @@ public class ResultPartitionManager implements ResultPartitionProvider {
 
 			LOG.debug("Requesting subpartition {} of {}.", subpartitionIndex, partition);
 
-			return partition.createSubpartitionView(subpartitionIndex, bufferProvider);
+			return partition.createSubpartitionView(subpartitionIndex, availabilityListener);
 		}
 	}
 

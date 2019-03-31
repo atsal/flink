@@ -24,6 +24,7 @@ import akka.util.Timeout;
 import org.apache.flink.runtime.akka.AkkaUtils;
 import org.apache.flink.runtime.messages.LeaderSessionMessageDecorator;
 import org.apache.flink.runtime.messages.MessageDecorator;
+import org.apache.flink.util.Preconditions;
 import scala.concurrent.ExecutionContext;
 import scala.concurrent.Future;
 import scala.concurrent.duration.FiniteDuration;
@@ -36,7 +37,7 @@ import java.util.UUID;
  */
 public class AkkaActorGateway implements ActorGateway, Serializable {
 
-	private static final long serialVersionUID = 42l;
+	private static final long serialVersionUID = 42L;
 
 	// ActorRef of the remote instance
 	private final ActorRef actor;
@@ -48,8 +49,8 @@ public class AkkaActorGateway implements ActorGateway, Serializable {
 	private final MessageDecorator decorator;
 
 	public AkkaActorGateway(ActorRef actor, UUID leaderSessionID) {
-		this.actor = actor;
-		this.leaderSessionID = leaderSessionID;
+		this.actor = Preconditions.checkNotNull(actor);
+		this.leaderSessionID = Preconditions.checkNotNull(leaderSessionID);
 		// we want to wrap RequiresLeaderSessionID messages in a LeaderSessionMessage
 		this.decorator = new LeaderSessionMessageDecorator(leaderSessionID);
 	}
@@ -155,5 +156,10 @@ public class AkkaActorGateway implements ActorGateway, Serializable {
 	@Override
 	public UUID leaderSessionID() {
 		return leaderSessionID;
+	}
+
+	@Override
+	public String toString() {
+		return String.format("AkkaActorGateway(%s, %s)", actor.path(), leaderSessionID);
 	}
 }

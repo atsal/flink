@@ -19,6 +19,7 @@
 package org.apache.flink.runtime.operators;
 
 import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.api.common.io.CleanupWhenUnsuccessful;
 import org.apache.flink.api.common.io.OutputFormat;
 import org.apache.flink.api.common.io.RichOutputFormat;
@@ -27,13 +28,16 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerFactory;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.IOReadableWritable;
-import org.apache.flink.runtime.accumulators.AccumulatorRegistry;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.runtime.execution.CancelTaskException;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.io.network.api.reader.MutableReader;
 import org.apache.flink.runtime.io.network.api.reader.MutableRecordReader;
 import org.apache.flink.runtime.io.network.partition.consumer.UnionInputGate;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
+import org.apache.flink.runtime.metrics.groups.OperatorIOMetricGroup;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.operators.chaining.ExceptionInChainedStubException;
 import org.apache.flink.runtime.operators.sort.UnilateralSortMerger;
 import org.apache.flink.runtime.operators.util.CloseableInputProvider;
@@ -41,12 +45,10 @@ import org.apache.flink.runtime.operators.util.DistributedRuntimeUDFContext;
 import org.apache.flink.runtime.operators.util.ReaderIterator;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.plugable.DeserializationDelegate;
-import org.apache.flink.util.InstantiationUtil;
 import org.apache.flink.util.MutableObjectIterator;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.IOException;
 
 /**
  * DataSinkTask which is executed by a task manager. The task hands the data to an output format.
@@ -54,12 +56,12 @@ import java.io.IOException;
  * @see OutputFormat
  */
 public class DataSinkTask<IT> extends AbstractInvokable {
-	
+
 	// Obtain DataSinkTask Logger
 	private static final Logger LOG = LoggerFactory.getLogger(DataSinkTask.class);
 
 	// --------------------------------------------------------------------------------------------
-	
+
 	// OutputFormat instance. volatile, because the asynchronous canceller may access it
 	private volatile OutputFormat<IT> format;
 
@@ -82,15 +84,25 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 	
 	private volatile boolean cleanupCalled;
 
+	/**
+	 * Create an Invokable task and set its environment.
+	 *
+	 * @param environment The environment assigned to this invokable.
+	 */
+	public DataSinkTask(Environment environment) {
+		super(environment);
+	}
+
 	@Override
-	public void registerInputOutput() {
-		if (LOG.isDebugEnabled()) {
-			LOG.debug(getLogString("Start registering input and output"));
-		}
+	public void invoke() throws Exception {
+		// --------------------------------------------------------------------
+		// Initialize
+		// --------------------------------------------------------------------
+		LOG.debug(getLogString("Start registering input and output"));
 
 		// initialize OutputFormat
 		initOutputFormat();
-		
+
 		// initialize input readers
 		try {
 			initInputReaders();
@@ -99,47 +111,40 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 					(e.getMessage() == null ? "." : ": " + e.getMessage()), e);
 		}
 
-		if (LOG.isDebugEnabled()) {
-			LOG.debug(getLogString("Finished registering input and output"));
-		}
-	}
+		LOG.debug(getLogString("Finished registering input and output"));
 
+		// --------------------------------------------------------------------
+		// Invoke
+		// --------------------------------------------------------------------
+		LOG.debug(getLogString("Starting data sink operator"));
 
-	@Override
-	public void invoke() throws Exception
-	{
-		if (LOG.isDebugEnabled()) {
-			LOG.debug(getLogString("Starting data sink operator"));
+		RuntimeContext ctx = createRuntimeContext();
+
+		final Counter numRecordsIn;
+		{
+			Counter tmpNumRecordsIn;
+			try {
+				OperatorIOMetricGroup ioMetricGroup = ((OperatorMetricGroup) ctx.getMetricGroup()).getIOMetricGroup();
+				ioMetricGroup.reuseInputMetricsForTask();
+				ioMetricGroup.reuseOutputMetricsForTask();
+				tmpNumRecordsIn = ioMetricGroup.getNumRecordsInCounter();
+			} catch (Exception e) {
+				LOG.warn("An exception occurred during the metrics setup.", e);
+				tmpNumRecordsIn = new SimpleCounter();
+			}
+			numRecordsIn = tmpNumRecordsIn;
 		}
 
 		if(RichOutputFormat.class.isAssignableFrom(this.format.getClass())){
-			((RichOutputFormat) this.format).setRuntimeContext(createRuntimeContext());
-			if (LOG.isDebugEnabled()) {
-				LOG.debug(getLogString("Rich Sink detected. Initializing runtime context."));
-			}
+			((RichOutputFormat) this.format).setRuntimeContext(ctx);
+			LOG.debug(getLogString("Rich Sink detected. Initializing runtime context."));
 		}
 
-		ExecutionConfig executionConfig;
-		try {
-			ExecutionConfig c = (ExecutionConfig) InstantiationUtil.readObjectFromConfig(
-					getJobConfiguration(),
-					ExecutionConfig.CONFIG_KEY,
-					getUserCodeClassLoader());
-			if (c != null) {
-				executionConfig = c;
-			} else {
-				LOG.warn("The execution config returned by the configuration was null");
-				executionConfig = new ExecutionConfig();
-			}
-		} catch (IOException e) {
-			throw new RuntimeException("Could not load ExecutionConfig from Job Configuration: " + e);
-		} catch (ClassNotFoundException e) {
-			throw new RuntimeException("Could not load ExecutionConfig from Job Configuration: " + e);
-		}
+		ExecutionConfig executionConfig = getExecutionConfig();
+
 		boolean objectReuseEnabled = executionConfig.isObjectReuseEnabled();
 		
 		try {
-			
 			// initialize local strategies
 			MutableObjectIterator<IT> input1;
 			switch (this.config.getInputLocalStrategy(0)) {
@@ -164,7 +169,9 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 							getEnvironment().getIOManager(),
 							this.reader, this, this.inputTypeSerializerFactory, compFact.createComparator(),
 							this.config.getRelativeMemoryInput(0), this.config.getFilehandlesInput(0),
-							this.config.getSpillingThresholdInput(0));
+							this.config.getSpillingThresholdInput(0),
+							this.config.getUseLargeRecordHandler(),
+							this.getExecutionConfig().isObjectReuseEnabled());
 					
 					this.localStrategy = sorter;
 					input1 = sorter.getIterator();
@@ -189,18 +196,17 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 				return;
 			}
 
-			if (LOG.isDebugEnabled()) {
-				LOG.debug(getLogString("Starting to produce output"));
-			}
+			LOG.debug(getLogString("Starting to produce output"));
 
 			// open
-			format.open(this.getEnvironment().getIndexInSubtaskGroup(), this.getEnvironment().getNumberOfSubtasks());
+			format.open(this.getEnvironment().getTaskInfo().getIndexOfThisSubtask(), this.getEnvironment().getTaskInfo().getNumberOfParallelSubtasks());
 
 			if (objectReuseEnabled) {
 				IT record = serializer.createInstance();
 
 				// work!
 				while (!this.taskCanceled && ((record = input.next(record)) != null)) {
+					numRecordsIn.inc();
 					format.writeRecord(record);
 				}
 			} else {
@@ -208,6 +214,7 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 
 				// work!
 				while (!this.taskCanceled && ((record = input.next()) != null)) {
+					numRecordsIn.inc();
 					format.writeRecord(record);
 				}
 			}
@@ -267,18 +274,14 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 				}
 			}
 
-			RegularPactTask.clearReaders(new MutableReader[]{inputReader});
+			BatchTask.clearReaders(new MutableReader<?>[]{inputReader});
 		}
 
 		if (!this.taskCanceled) {
-			if (LOG.isDebugEnabled()) {
-				LOG.debug(getLogString("Finished data sink operator"));
-			}
+			LOG.debug(getLogString("Finished data sink operator"));
 		}
 		else {
-			if (LOG.isDebugEnabled()) {
-				LOG.debug(getLogString("Data sink operator cancelled"));
-			}
+			LOG.debug(getLogString("Data sink operator cancelled"));
 		}
 	}
 
@@ -303,11 +306,9 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 			}
 		}
 		
-		if (LOG.isDebugEnabled()) {
-			LOG.debug(getLogString("Cancelling data sink operator"));
-		}
+		LOG.debug(getLogString("Cancelling data sink operator"));
 	}
-	
+
 	/**
 	 * Initializes the OutputFormat implementation and configuration.
 	 * 
@@ -365,19 +366,18 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 		numGates += groupSize;
 		if (groupSize == 1) {
 			// non-union case
-			inputReader = new MutableRecordReader<DeserializationDelegate<IT>>(getEnvironment().getInputGate(0));
+			inputReader = new MutableRecordReader<DeserializationDelegate<IT>>(
+					getEnvironment().getInputGate(0),
+					getEnvironment().getTaskManagerInfo().getTmpDirectories());
 		} else if (groupSize > 1){
 			// union case
-			inputReader = new MutableRecordReader<IOReadableWritable>(new UnionInputGate(getEnvironment().getAllInputGates()));
+			inputReader = new MutableRecordReader<IOReadableWritable>(
+					new UnionInputGate(getEnvironment().getAllInputGates()),
+					getEnvironment().getTaskManagerInfo().getTmpDirectories());
 		} else {
 			throw new Exception("Illegal input group size in task configuration: " + groupSize);
 		}
-
-		final AccumulatorRegistry accumulatorRegistry = getEnvironment().getAccumulatorRegistry();
-		final AccumulatorRegistry.Reporter reporter = accumulatorRegistry.getReadWriteReporter();
-
-		inputReader.setReporter(reporter);
-
+		
 		this.inputTypeSerializerFactory = this.config.getInputSerializer(0, getUserCodeClassLoader());
 		@SuppressWarnings({ "rawtypes" })
 		final MutableObjectIterator<?> iter = new ReaderIterator(inputReader, this.inputTypeSerializerFactory.getSerializer());
@@ -401,14 +401,14 @@ public class DataSinkTask<IT> extends AbstractInvokable {
 	 * @return The string ready for logging.
 	 */
 	private String getLogString(String message) {
-		return RegularPactTask.constructLogString(message, this.getEnvironment().getTaskName(), this);
+		return BatchTask.constructLogString(message, this.getEnvironment().getTaskInfo().getTaskName(), this);
 	}
 
 	public DistributedRuntimeUDFContext createRuntimeContext() {
 		Environment env = getEnvironment();
 
-		return new DistributedRuntimeUDFContext(env.getTaskName(), env.getNumberOfSubtasks(),
-				env.getIndexInSubtaskGroup(), getUserCodeClassLoader(), getExecutionConfig(),
-				env.getDistributedCacheEntries(), env.getAccumulatorRegistry().getUserMap());
+		return new DistributedRuntimeUDFContext(env.getTaskInfo(), getUserCodeClassLoader(),
+				getExecutionConfig(), env.getDistributedCacheEntries(), env.getAccumulatorRegistry().getUserMap(), 
+				getEnvironment().getMetricGroup().getOrAddOperator(getEnvironment().getTaskInfo().getTaskName()));
 	}
 }

@@ -18,26 +18,22 @@
 
 package org.apache.flink.runtime.operators;
 
-import org.apache.flink.api.common.typeutils.record.RecordComparatorFactory;
-import org.apache.flink.api.java.record.io.DelimitedOutputFormat;
+import org.apache.flink.api.common.io.FileOutputFormat;
+import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.io.network.partition.consumer.IteratorWrappingTestSingleInputGate;
-import org.apache.flink.runtime.io.network.api.writer.ResultPartitionWriter;
 import org.apache.flink.runtime.operators.testutils.InfiniteInputIterator;
 import org.apache.flink.runtime.operators.testutils.TaskCancelThread;
 import org.apache.flink.runtime.operators.testutils.TaskTestBase;
 import org.apache.flink.runtime.operators.testutils.UniformRecordGenerator;
 import org.apache.flink.runtime.operators.util.LocalStrategy;
-import org.apache.flink.runtime.taskmanager.Task;
+import org.apache.flink.runtime.testutils.recordutils.RecordComparatorFactory;
 import org.apache.flink.types.IntValue;
-import org.apache.flink.types.Key;
 import org.apache.flink.types.Record;
-import org.junit.After;
 import org.junit.Assert;
+import org.junit.Rule;
 import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.junit4.PowerMockRunner;
+import org.junit.rules.TemporaryFolder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,26 +45,21 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
-@RunWith(PowerMockRunner.class)
-@PrepareForTest({Task.class, ResultPartitionWriter.class})
-public class DataSinkTaskTest extends TaskTestBase
-{
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public class DataSinkTaskTest extends TaskTestBase {
+
+	@Rule
+	public TemporaryFolder tempFolder = new TemporaryFolder();
+	
 	private static final Logger LOG = LoggerFactory.getLogger(DataSinkTaskTest.class);
 
 	private static final int MEMORY_MANAGER_SIZE = 3 * 1024 * 1024;
 
 	private static final int NETWORK_BUFFER_SIZE = 1024;
-
-	private final String tempTestPath = constructTestPath(DataSinkTaskTest.class, "dst_test");
-
-	@After
-	public void cleanUp() {
-		File tempTestFile = new File(this.tempTestPath);
-		if(tempTestFile.exists()) {
-			tempTestFile.delete();
-		}
-	}
 
 	@Test
 	public void testDataSinkTask() {
@@ -81,20 +72,19 @@ public class DataSinkTaskTest extends TaskTestBase
 			super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 			super.addInput(new UniformRecordGenerator(keyCnt, valCnt, false), 0);
 
-			DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+			DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 
-			super.registerFileOutputTask(testTask, MockOutputFormat.class, new File(tempTestPath).toURI().toString());
+			File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+			super.registerFileOutputTask(MockOutputFormat.class, tempTestFile.toURI().toString());
 
 			testTask.invoke();
-
-			File tempTestFile = new File(this.tempTestPath);
 
 			Assert.assertTrue("Temp output file does not exist", tempTestFile.exists());
 
 			fr = new FileReader(tempTestFile);
 			br = new BufferedReader(fr);
 
-			HashMap<Integer, HashSet<Integer>> keyValueCountMap = new HashMap<Integer, HashSet<Integer>>(keyCnt);
+			HashMap<Integer, HashSet<Integer>> keyValueCountMap = new HashMap<>(keyCnt);
 
 			while (br.ready()) {
 				String line = br.readLine();
@@ -132,27 +122,28 @@ public class DataSinkTaskTest extends TaskTestBase
 
 	@Test
 	public void testUnionDataSinkTask() {
-
 		int keyCnt = 10;
 		int valCnt = 20;
 
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 
-		IteratorWrappingTestSingleInputGate<?>[] readers = new IteratorWrappingTestSingleInputGate[4];
+		final IteratorWrappingTestSingleInputGate<?>[] readers = new IteratorWrappingTestSingleInputGate[4];
 		readers[0] = super.addInput(new UniformRecordGenerator(keyCnt, valCnt, 0, 0, false), 0, false);
 		readers[1] = super.addInput(new UniformRecordGenerator(keyCnt, valCnt, keyCnt, 0, false), 0, false);
 		readers[2] = super.addInput(new UniformRecordGenerator(keyCnt, valCnt, keyCnt * 2, 0, false), 0, false);
 		readers[3] = super.addInput(new UniformRecordGenerator(keyCnt, valCnt, keyCnt * 3, 0, false), 0, false);
 
-		DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 
-		super.registerFileOutputTask(testTask, MockOutputFormat.class, new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		super.registerFileOutputTask(MockOutputFormat.class, tempTestFile.toURI().toString());
 
 		try {
 			// For the union reader to work, we need to start notifications *after* the union reader
-			// has been initialized.
+			// has been initialized. This is accomplished via a mockito hack in TestSingleInputGate,
+			// which checks forwards existing notifications on registerListener calls.
 			for (IteratorWrappingTestSingleInputGate<?> reader : readers) {
-				reader.read();
+				reader.notifyNonEmpty();
 			}
 
 			testTask.invoke();
@@ -160,8 +151,6 @@ public class DataSinkTaskTest extends TaskTestBase
 			LOG.debug("Exception while invoking the test task.", e);
 			Assert.fail("Invoke method caused exception.");
 		}
-
-		File tempTestFile = new File(this.tempTestPath);
 
 		Assert.assertTrue("Temp output file does not exist",tempTestFile.exists());
 
@@ -171,7 +160,7 @@ public class DataSinkTaskTest extends TaskTestBase
 			fr = new FileReader(tempTestFile);
 			br = new BufferedReader(fr);
 
-			HashMap<Integer,HashSet<Integer>> keyValueCountMap = new HashMap<Integer, HashSet<Integer>>(keyCnt);
+			HashMap<Integer,HashSet<Integer>> keyValueCountMap = new HashMap<>(keyCnt);
 
 			while(br.ready()) {
 				String line = br.readLine();
@@ -219,17 +208,18 @@ public class DataSinkTaskTest extends TaskTestBase
 
 		super.addInput(new UniformRecordGenerator(keyCnt, valCnt, true), 0);
 
-		DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 
 		// set sorting
 		super.getTaskConfig().setInputLocalStrategy(0, LocalStrategy.SORT);
 		super.getTaskConfig().setInputComparator(
-				new RecordComparatorFactory(new int[]{1},((Class<? extends Key<?>>[])new Class[]{IntValue.class})), 0);
+				new RecordComparatorFactory(new int[]{1},(new Class[]{IntValue.class})), 0);
 		super.getTaskConfig().setRelativeMemoryInput(0, memoryFraction);
 		super.getTaskConfig().setFilehandlesInput(0, 8);
 		super.getTaskConfig().setSpillingThresholdInput(0, 0.8f);
 
-		super.registerFileOutputTask(testTask, MockOutputFormat.class, new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());;
+		super.registerFileOutputTask(MockOutputFormat.class, tempTestFile.toURI().toString());
 
 		try {
 			testTask.invoke();
@@ -237,8 +227,6 @@ public class DataSinkTaskTest extends TaskTestBase
 			LOG.debug("Exception while invoking the test task.", e);
 			Assert.fail("Invoke method caused exception.");
 		}
-
-		File tempTestFile = new File(this.tempTestPath);
 
 		Assert.assertTrue("Temp output file does not exist",tempTestFile.exists());
 
@@ -248,7 +236,7 @@ public class DataSinkTaskTest extends TaskTestBase
 			fr = new FileReader(tempTestFile);
 			br = new BufferedReader(fr);
 
-			Set<Integer> keys = new HashSet<Integer>();
+			Set<Integer> keys = new HashSet<>();
 
 			int curVal = -1;
 			while(br.ready()) {
@@ -297,11 +285,12 @@ public class DataSinkTaskTest extends TaskTestBase
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addInput(new UniformRecordGenerator(keyCnt, valCnt, false), 0);
 
-		DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 		Configuration stubParams = new Configuration();
 		super.getTaskConfig().setStubParameters(stubParams);
 
-		super.registerFileOutputTask(testTask, MockFailingOutputFormat.class, new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		super.registerFileOutputTask(MockFailingOutputFormat.class, tempTestFile.toURI().toString());
 
 		boolean stubFailed = false;
 
@@ -312,8 +301,7 @@ public class DataSinkTaskTest extends TaskTestBase
 		}
 		Assert.assertTrue("Function exception was not forwarded.", stubFailed);
 
-		// assert that temp file was created
-		File tempTestFile = new File(this.tempTestPath);
+		// assert that temp file was removed
 		Assert.assertFalse("Temp output file has not been removed", tempTestFile.exists());
 
 	}
@@ -323,26 +311,26 @@ public class DataSinkTaskTest extends TaskTestBase
 	public void testFailingSortingDataSinkTask() {
 
 		int keyCnt = 100;
-		int valCnt = 20;;
+		int valCnt = 20;
 		double memoryFraction = 1.0;
 
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addInput(new UniformRecordGenerator(keyCnt, valCnt, true), 0);
 
-		DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 		Configuration stubParams = new Configuration();
 		super.getTaskConfig().setStubParameters(stubParams);
 
 		// set sorting
 		super.getTaskConfig().setInputLocalStrategy(0, LocalStrategy.SORT);
 		super.getTaskConfig().setInputComparator(
-				new RecordComparatorFactory(new int[]{1}, ((Class<? extends Key<?>>[]) new Class[]{IntValue.class})),
-				0);
+				new RecordComparatorFactory(new int[]{1}, ( new Class[]{IntValue.class})), 0);
 		super.getTaskConfig().setRelativeMemoryInput(0, memoryFraction);
 		super.getTaskConfig().setFilehandlesInput(0, 8);
 		super.getTaskConfig().setSpillingThresholdInput(0, 0.8f);
 
-		super.registerFileOutputTask(testTask, MockFailingOutputFormat.class, new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		super.registerFileOutputTask(MockFailingOutputFormat.class, tempTestFile.toURI().toString());
 
 		boolean stubFailed = false;
 
@@ -353,23 +341,23 @@ public class DataSinkTaskTest extends TaskTestBase
 		}
 		Assert.assertTrue("Function exception was not forwarded.", stubFailed);
 
-		// assert that temp file was created
-		File tempTestFile = new File(this.tempTestPath);
+		// assert that temp file was removed
 		Assert.assertFalse("Temp output file has not been removed", tempTestFile.exists());
 
 	}
 
 	@Test
-	public void testCancelDataSinkTask() {
-
+	public void testCancelDataSinkTask() throws Exception {
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addInput(new InfiniteInputIterator(), 0);
 
-		final DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		final DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 		Configuration stubParams = new Configuration();
 		super.getTaskConfig().setStubParameters(stubParams);
 
-		super.registerFileOutputTask(testTask, MockOutputFormat.class,  new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+
+		super.registerFileOutputTask(MockOutputFormat.class, tempTestFile.toURI().toString());
 
 		Thread taskRunner = new Thread() {
 			@Override
@@ -383,20 +371,24 @@ public class DataSinkTaskTest extends TaskTestBase
 			}
 		};
 		taskRunner.start();
-
-		TaskCancelThread tct = new TaskCancelThread(1, taskRunner, testTask);
-		tct.start();
-
-		try {
-			tct.join();
-			taskRunner.join();
-		} catch(InterruptedException ie) {
-			Assert.fail("Joining threads failed");
+		
+		// wait until the task created the file
+		long deadline = System.currentTimeMillis() + 60000;
+		while (!tempTestFile.exists() && System.currentTimeMillis() < deadline) {
+			Thread.sleep(10);
 		}
+		assertTrue("Task did not create file within 60 seconds", tempTestFile.exists());
+		
+		// cancel the task
+		Thread.sleep(500);
+		testTask.cancel();
+		taskRunner.interrupt();
+		
+		// wait for the canceling to complete
+		taskRunner.join();
 
 		// assert that temp file was created
-		File tempTestFile = new File(this.tempTestPath);
-		Assert.assertFalse("Temp output file has not been removed", tempTestFile.exists());
+		assertFalse("Temp output file has not been removed", tempTestFile.exists());
 	}
 
 	@Test
@@ -407,20 +399,20 @@ public class DataSinkTaskTest extends TaskTestBase
 		super.initEnvironment(MEMORY_MANAGER_SIZE, NETWORK_BUFFER_SIZE);
 		super.addInput(new InfiniteInputIterator(), 0);
 
-		final DataSinkTask<Record> testTask = new DataSinkTask<Record>();
+		final DataSinkTask<Record> testTask = new DataSinkTask<>(this.mockEnv);
 		Configuration stubParams = new Configuration();
 		super.getTaskConfig().setStubParameters(stubParams);
 
 		// set sorting
 		super.getTaskConfig().setInputLocalStrategy(0, LocalStrategy.SORT);
 		super.getTaskConfig().setInputComparator(
-				new RecordComparatorFactory(new int[]{1},((Class<? extends Key<?>>[])new Class[]{IntValue.class})),
-				0);
+				new RecordComparatorFactory(new int[]{1},(new Class[]{IntValue.class})), 0);
 		super.getTaskConfig().setRelativeMemoryInput(0, memoryFraction);
 		super.getTaskConfig().setFilehandlesInput(0, 8);
 		super.getTaskConfig().setSpillingThresholdInput(0, 0.8f);
 
-		super.registerFileOutputTask(testTask, MockOutputFormat.class,  new File(tempTestPath).toURI().toString());
+		File tempTestFile = new File(tempFolder.getRoot(), UUID.randomUUID().toString());
+		super.registerFileOutputTask(MockOutputFormat.class, tempTestFile.toURI().toString());
 
 		Thread taskRunner = new Thread() {
 			@Override
@@ -447,7 +439,7 @@ public class DataSinkTaskTest extends TaskTestBase
 
 	}
 
-	public static class MockOutputFormat extends DelimitedOutputFormat {
+	public static class MockOutputFormat extends FileOutputFormat<Record> {
 		private static final long serialVersionUID = 1L;
 
 		final StringBuilder bld = new StringBuilder();
@@ -458,8 +450,7 @@ public class DataSinkTaskTest extends TaskTestBase
 		}
 
 		@Override
-		public int serializeRecord(Record rec, byte[] target) throws Exception
-		{
+		public void writeRecord(Record rec) throws IOException {
 			IntValue key = rec.getField(0, IntValue.class);
 			IntValue value = rec.getField(1, IntValue.class);
 
@@ -467,14 +458,11 @@ public class DataSinkTaskTest extends TaskTestBase
 			this.bld.append(key.getValue());
 			this.bld.append('_');
 			this.bld.append(value.getValue());
+			this.bld.append('\n');
 
-			byte[] bytes = this.bld.toString().getBytes();
-			if (bytes.length <= target.length) {
-				System.arraycopy(bytes, 0, target, 0, bytes.length);
-				return bytes.length;
-			}
-			// else
-			return -bytes.length;
+			byte[] bytes = this.bld.toString().getBytes(ConfigConstants.DEFAULT_CHARSET);
+
+			this.stream.write(bytes);
 		}
 
 	}
@@ -490,28 +478,12 @@ public class DataSinkTaskTest extends TaskTestBase
 		}
 
 		@Override
-		public int serializeRecord(Record rec, byte[] target) throws Exception
-		{
+		public void writeRecord(Record rec) throws IOException {
 			if (++this.cnt >= 10) {
 				throw new RuntimeException("Expected Test Exception");
 			}
-			return super.serializeRecord(rec, target);
+			super.writeRecord(rec);
 		}
-	}
-	
-	public static String constructTestPath(Class<?> forClass, String folder) {
-		// we create test path that depends on class to prevent name clashes when two tests
-		// create temp files with the same name
-		String path = System.getProperty("java.io.tmpdir");
-		if (!(path.endsWith("/") || path.endsWith("\\")) ) {
-			path += System.getProperty("file.separator");
-		}
-		path += (forClass.getName() + "-" + folder);
-		return path;
-	}
-	
-	public static String constructTestURI(Class<?> forClass, String folder) {
-		return new File(constructTestPath(forClass, folder)).toURI().toString();
 	}
 }
 

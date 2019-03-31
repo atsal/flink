@@ -26,15 +26,17 @@ import org.apache.flink.api.common.operators.Operator;
 import org.apache.flink.api.common.operators.Union;
 import org.apache.flink.api.common.operators.base.BulkIterationBase;
 import org.apache.flink.api.common.operators.base.CoGroupOperatorBase;
+import org.apache.flink.api.common.operators.base.CoGroupRawOperatorBase;
 import org.apache.flink.api.common.operators.base.CrossOperatorBase;
 import org.apache.flink.api.common.operators.base.DeltaIterationBase;
 import org.apache.flink.api.common.operators.base.FilterOperatorBase;
 import org.apache.flink.api.common.operators.base.FlatMapOperatorBase;
 import org.apache.flink.api.common.operators.base.GroupCombineOperatorBase;
 import org.apache.flink.api.common.operators.base.GroupReduceOperatorBase;
-import org.apache.flink.api.common.operators.base.JoinOperatorBase;
+import org.apache.flink.api.common.operators.base.InnerJoinOperatorBase;
 import org.apache.flink.api.common.operators.base.MapOperatorBase;
 import org.apache.flink.api.common.operators.base.MapPartitionOperatorBase;
+import org.apache.flink.api.common.operators.base.OuterJoinOperatorBase;
 import org.apache.flink.api.common.operators.base.PartitionOperatorBase;
 import org.apache.flink.api.common.operators.base.ReduceOperatorBase;
 import org.apache.flink.api.common.operators.base.SortPartitionOperatorBase;
@@ -44,7 +46,7 @@ import org.apache.flink.optimizer.dag.BinaryUnionNode;
 import org.apache.flink.optimizer.dag.BulkIterationNode;
 import org.apache.flink.optimizer.dag.BulkPartialSolutionNode;
 import org.apache.flink.optimizer.dag.CoGroupNode;
-import org.apache.flink.optimizer.dag.CollectorMapNode;
+import org.apache.flink.optimizer.dag.CoGroupRawNode;
 import org.apache.flink.optimizer.dag.CrossNode;
 import org.apache.flink.optimizer.dag.DagConnection;
 import org.apache.flink.optimizer.dag.DataSinkNode;
@@ -57,6 +59,7 @@ import org.apache.flink.optimizer.dag.JoinNode;
 import org.apache.flink.optimizer.dag.MapNode;
 import org.apache.flink.optimizer.dag.MapPartitionNode;
 import org.apache.flink.optimizer.dag.OptimizerNode;
+import org.apache.flink.optimizer.dag.OuterJoinNode;
 import org.apache.flink.optimizer.dag.PartitionNode;
 import org.apache.flink.optimizer.dag.ReduceNode;
 import org.apache.flink.optimizer.dag.SolutionSetNode;
@@ -69,14 +72,12 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.apache.flink.api.common.operators.base.CoGroupRawOperatorBase;
-import org.apache.flink.optimizer.dag.CoGroupRawNode;
 
 /**
  * This traversal creates the optimizer DAG from a program.
  * It works as a visitor that walks the program's flow in a depth-first fashion, starting from the data sinks.
- * During the descend, it creates an optimizer node for each operator, respectively data source or -sink.
- * During the ascend, it connects the nodes to the full graph.
+ * During the descent it creates an optimizer node for each operator, respectively data source or sink.
+ * During the ascent it connects the nodes to the full graph.
  */
 public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 
@@ -142,9 +143,6 @@ public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 		else if (c instanceof MapPartitionOperatorBase) {
 			n = new MapPartitionNode((MapPartitionOperatorBase<?, ?, ?>) c);
 		}
-		else if (c instanceof org.apache.flink.api.common.operators.base.CollectorMapOperatorBase) {
-			n = new CollectorMapNode((org.apache.flink.api.common.operators.base.CollectorMapOperatorBase<?, ?, ?>) c);
-		}
 		else if (c instanceof FlatMapOperatorBase) {
 			n = new FlatMapNode((FlatMapOperatorBase<?, ?, ?>) c);
 		}
@@ -160,8 +158,11 @@ public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 		else if (c instanceof GroupReduceOperatorBase) {
 			n = new GroupReduceNode((GroupReduceOperatorBase<?, ?, ?>) c);
 		}
-		else if (c instanceof JoinOperatorBase) {
-			n = new JoinNode((JoinOperatorBase<?, ?, ?, ?>) c);
+		else if (c instanceof InnerJoinOperatorBase) {
+			n = new JoinNode((InnerJoinOperatorBase<?, ?, ?, ?>) c);
+		}
+		else if (c instanceof OuterJoinOperatorBase) {
+			n = new OuterJoinNode((OuterJoinOperatorBase<?, ?, ?, ?>) c);
 		}
 		else if (c instanceof CoGroupOperatorBase) {
 			n = new CoGroupNode((CoGroupOperatorBase<?, ?, ?, ?>) c);
@@ -243,7 +244,11 @@ public class GraphCreatingVisitor implements Visitor<Operator<?>> {
 		if (n.getParallelism() < 1) {
 			// set the parallelism
 			int par = c.getParallelism();
-			if (par > 0) {
+			if (n instanceof BinaryUnionNode) {
+				// Keep parallelism of union undefined for now.
+				// It will be determined based on the parallelism of its successor.
+				par = -1;
+			} else if (par > 0) {
 				if (this.forceParallelism && par != this.defaultParallelism) {
 					par = this.defaultParallelism;
 					Optimizer.LOG.warn("The parallelism of nested dataflows (such as step functions in iterations) is " +

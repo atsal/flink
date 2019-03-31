@@ -18,11 +18,6 @@
 
 package org.apache.flink.runtime.operators.sort;
 
-import java.io.EOFException;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.MemorySegment;
@@ -33,6 +28,11 @@ import org.apache.flink.runtime.memory.ListMemorySegmentSource;
 import org.apache.flink.util.MutableObjectIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.EOFException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 
@@ -133,14 +133,7 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 			throw new IllegalArgumentException("Normalized-Key sorter requires at least " + MIN_REQUIRED_BUFFERS + " memory buffers.");
 		}
 		this.segmentSize = memory.get(0).size();
-		
-		if (memory instanceof ArrayList<?>) {
-			this.freeMemory = (ArrayList<MemorySegment>) memory;
-		}
-		else {
-			this.freeMemory = new ArrayList<MemorySegment>(memory.size());
-			this.freeMemory.addAll(memory);
-		}
+		this.freeMemory = new ArrayList<MemorySegment>(memory);
 		
 		// create the buffer collections
 		this.sortIndex = new ArrayList<MemorySegment>(16);
@@ -174,13 +167,23 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 		
 		// compute the index entry size and limits
 		this.indexEntrySize = this.numKeyBytes + OFFSET_LEN;
-		this.indexEntriesPerSegment = segmentSize / this.indexEntrySize;
+		this.indexEntriesPerSegment = this.segmentSize / this.indexEntrySize;
 		this.lastIndexEntryOffset = (this.indexEntriesPerSegment - 1) * this.indexEntrySize;
 		this.swapBuffer = new byte[this.indexEntrySize];
 		
 		// set to initial state
 		this.currentSortIndexSegment = nextMemorySegment();
 		this.sortIndex.add(this.currentSortIndexSegment);
+	}
+
+	@Override
+	public int recordSize() {
+		return indexEntrySize;
+	}
+
+	@Override
+	public int recordsPerSegment() {
+		return indexEntriesPerSegment;
 	}
 
 	// -------------------------------------------------------------------------
@@ -220,20 +223,11 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 		return this.numRecords == 0;
 	}
 	
-	/**
-	 * Collects all memory segments from this sorter.
-	 * 
-	 * @return All memory segments from this sorter.
-	 */
 	@Override
-	public List<MemorySegment> dispose() {
-		this.freeMemory.addAll(this.sortIndex);
-		this.freeMemory.addAll(this.recordBufferSegments);
-		
+	public void dispose() {
+		this.freeMemory.clear();
 		this.recordBufferSegments.clear();
 		this.sortIndex.clear();
-		
-		return this.freeMemory;
 	}
 	
 	@Override
@@ -245,23 +239,16 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 	public long getOccupancy() {
 		return this.currentDataBufferOffset + this.sortIndexBytes;
 	}
-	
-	@Override
-	public long getNumRecordBytes() {
-		return this.currentDataBufferOffset;
-	}
 
 	// -------------------------------------------------------------------------
 	// Retrieving and Writing
 	// -------------------------------------------------------------------------
 
-	/**
-	 * Gets the record at the given logical position.
-	 * 
-	 * @param reuse The target object to deserialize the record into.
-	 * @param logicalPosition The logical position of the record.
-	 * @throws IOException Thrown, if an exception occurred during deserialization.
-	 */
+	@Override
+	public T getRecord(int logicalPosition) throws IOException {
+		return getRecordFromBuffer(readPointer(logicalPosition));
+	}
+	
 	@Override
 	public T getRecord(T reuse, int logicalPosition) throws IOException {
 		return getRecordFromBuffer(reuse, readPointer(logicalPosition));
@@ -323,7 +310,7 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 	// ------------------------------------------------------------------------
 	
 	private long readPointer(int logicalPosition) {
-		if (logicalPosition < 0 | logicalPosition >= this.numRecords) {
+		if (logicalPosition < 0 || logicalPosition >= this.numRecords) {
 			throw new IndexOutOfBoundsException();
 		}
 		
@@ -368,38 +355,48 @@ public final class NormalizedKeySorter<T> implements InMemorySorter<T> {
 
 	@Override
 	public int compare(int i, int j) {
-		final int bufferNumI = i / this.indexEntriesPerSegment;
+		final int segmentNumberI = i / this.indexEntriesPerSegment;
 		final int segmentOffsetI = (i % this.indexEntriesPerSegment) * this.indexEntrySize;
-		
-		final int bufferNumJ = j / this.indexEntriesPerSegment;
+
+		final int segmentNumberJ = j / this.indexEntriesPerSegment;
 		final int segmentOffsetJ = (j % this.indexEntriesPerSegment) * this.indexEntrySize;
-		
-		final MemorySegment segI = this.sortIndex.get(bufferNumI);
-		final MemorySegment segJ = this.sortIndex.get(bufferNumJ);
-		
+
+		return compare(segmentNumberI, segmentOffsetI, segmentNumberJ, segmentOffsetJ);
+	}
+
+	@Override
+	public int compare(int segmentNumberI, int segmentOffsetI, int segmentNumberJ, int segmentOffsetJ) {
+		final MemorySegment segI = this.sortIndex.get(segmentNumberI);
+		final MemorySegment segJ = this.sortIndex.get(segmentNumberJ);
+
 		int val = segI.compare(segJ, segmentOffsetI + OFFSET_LEN, segmentOffsetJ + OFFSET_LEN, this.numKeyBytes);
-		
+
 		if (val != 0 || this.normalizedKeyFullyDetermines) {
 			return this.useNormKeyUninverted ? val : -val;
 		}
-		
+
 		final long pointerI = segI.getLong(segmentOffsetI) & POINTER_MASK;
-		final long pointerJ = segJ.getLong(segmentOffsetJ)  & POINTER_MASK;
-		
+		final long pointerJ = segJ.getLong(segmentOffsetJ) & POINTER_MASK;
+
 		return compareRecords(pointerI, pointerJ);
 	}
 
 	@Override
 	public void swap(int i, int j) {
-		final int bufferNumI = i / this.indexEntriesPerSegment;
+		final int segmentNumberI = i / this.indexEntriesPerSegment;
 		final int segmentOffsetI = (i % this.indexEntriesPerSegment) * this.indexEntrySize;
-		
-		final int bufferNumJ = j / this.indexEntriesPerSegment;
+
+		final int segmentNumberJ = j / this.indexEntriesPerSegment;
 		final int segmentOffsetJ = (j % this.indexEntriesPerSegment) * this.indexEntrySize;
-		
-		final MemorySegment segI = this.sortIndex.get(bufferNumI);
-		final MemorySegment segJ = this.sortIndex.get(bufferNumJ);
-		
+
+		swap(segmentNumberI, segmentOffsetI, segmentNumberJ, segmentOffsetJ);
+	}
+
+	@Override
+	public void swap(int segmentNumberI, int segmentOffsetI, int segmentNumberJ, int segmentOffsetJ) {
+		final MemorySegment segI = this.sortIndex.get(segmentNumberI);
+		final MemorySegment segJ = this.sortIndex.get(segmentNumberJ);
+
 		segI.swapBytes(this.swapBuffer, segJ, segmentOffsetI, segmentOffsetJ, this.indexEntrySize);
 	}
 

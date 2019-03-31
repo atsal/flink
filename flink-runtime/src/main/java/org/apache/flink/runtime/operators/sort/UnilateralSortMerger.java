@@ -22,6 +22,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -146,41 +147,51 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 	 */
 	protected volatile boolean closed;
 
+	/**
+	 * Whether to reuse objects during deserialization.
+	 */
+	protected final boolean objectReuseEnabled;
+
+	private final Collection<InMemorySorter<?>> inMemorySorters;
+
 	// ------------------------------------------------------------------------
 	//                         Constructor & Shutdown
 	// ------------------------------------------------------------------------
 
 	public UnilateralSortMerger(MemoryManager memoryManager, IOManager ioManager,
-			MutableObjectIterator<E> input, AbstractInvokable parentTask, 
+			MutableObjectIterator<E> input, AbstractInvokable parentTask,
 			TypeSerializerFactory<E> serializerFactory, TypeComparator<E> comparator,
-			double memoryFraction, int maxNumFileHandles, float startSpillingFraction)
+			double memoryFraction, int maxNumFileHandles, float startSpillingFraction,
+			boolean handleLargeRecords, boolean objectReuseEnabled)
 	throws IOException, MemoryAllocationException
 	{
 		this(memoryManager, ioManager, input, parentTask, serializerFactory, comparator,
-			memoryFraction, -1, maxNumFileHandles, startSpillingFraction);
+			memoryFraction, -1, maxNumFileHandles, startSpillingFraction, handleLargeRecords, objectReuseEnabled);
 	}
-	
+
 	public UnilateralSortMerger(MemoryManager memoryManager, IOManager ioManager,
-			MutableObjectIterator<E> input, AbstractInvokable parentTask, 
+			MutableObjectIterator<E> input, AbstractInvokable parentTask,
 			TypeSerializerFactory<E> serializerFactory, TypeComparator<E> comparator,
 			double memoryFraction, int numSortBuffers, int maxNumFileHandles,
-			float startSpillingFraction)
+			float startSpillingFraction, boolean handleLargeRecords, boolean objectReuseEnabled)
 	throws IOException, MemoryAllocationException
 	{
 		this(memoryManager, ioManager, input, parentTask, serializerFactory, comparator,
-			memoryFraction, numSortBuffers, maxNumFileHandles, startSpillingFraction, false, true);
+			memoryFraction, numSortBuffers, maxNumFileHandles, startSpillingFraction, false, handleLargeRecords,
+			objectReuseEnabled);
 	}
-	
+
 	public UnilateralSortMerger(MemoryManager memoryManager, List<MemorySegment> memory,
 			IOManager ioManager,
 			MutableObjectIterator<E> input, AbstractInvokable parentTask, 
 			TypeSerializerFactory<E> serializerFactory, TypeComparator<E> comparator,
 			int numSortBuffers, int maxNumFileHandles,
-			float startSpillingFraction, boolean handleLargeRecords)
+			float startSpillingFraction, boolean handleLargeRecords, boolean objectReuseEnabled)
 	throws IOException
 	{
 		this(memoryManager, memory, ioManager, input, parentTask, serializerFactory, comparator,
-			numSortBuffers, maxNumFileHandles, startSpillingFraction, false, handleLargeRecords);
+			numSortBuffers, maxNumFileHandles, startSpillingFraction, false, handleLargeRecords,
+			objectReuseEnabled);
 	}
 	
 	protected UnilateralSortMerger(MemoryManager memoryManager,
@@ -188,12 +199,14 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 			MutableObjectIterator<E> input, AbstractInvokable parentTask, 
 			TypeSerializerFactory<E> serializerFactory, TypeComparator<E> comparator,
 			double memoryFraction, int numSortBuffers, int maxNumFileHandles,
-			float startSpillingFraction, boolean noSpillingMemory, boolean handleLargeRecords)
+			float startSpillingFraction, boolean noSpillingMemory, boolean handleLargeRecords,
+			boolean objectReuseEnabled)
 	throws IOException, MemoryAllocationException
 	{
 		this(memoryManager, memoryManager.allocatePages(parentTask, memoryManager.computeNumberOfPages(memoryFraction)),
 				ioManager, input, parentTask, serializerFactory, comparator,
-				numSortBuffers, maxNumFileHandles, startSpillingFraction, noSpillingMemory, true);
+				numSortBuffers, maxNumFileHandles, startSpillingFraction, noSpillingMemory, handleLargeRecords,
+				objectReuseEnabled);
 	}
 	
 	protected UnilateralSortMerger(MemoryManager memoryManager, List<MemorySegment> memory,
@@ -201,11 +214,42 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 			MutableObjectIterator<E> input, AbstractInvokable parentTask, 
 			TypeSerializerFactory<E> serializerFactory, TypeComparator<E> comparator,
 			int numSortBuffers, int maxNumFileHandles,
-			float startSpillingFraction, boolean noSpillingMemory, boolean handleLargeRecords)
-	throws IOException
-	{
+			float startSpillingFraction, boolean noSpillingMemory, boolean handleLargeRecords,
+			boolean objectReuseEnabled) throws IOException {
+		this (
+			memoryManager,
+			memory,
+			ioManager,
+			input,
+			parentTask,
+			serializerFactory,
+			comparator,
+			numSortBuffers,
+			maxNumFileHandles,
+			startSpillingFraction,
+			noSpillingMemory,
+			handleLargeRecords,
+			objectReuseEnabled,
+			new DefaultInMemorySorterFactory<>(serializerFactory, comparator, THRESHOLD_FOR_IN_PLACE_SORTING));
+	}
+
+	protected UnilateralSortMerger(
+			MemoryManager memoryManager,
+			List<MemorySegment> memory,
+			IOManager ioManager,
+			MutableObjectIterator<E> input,
+			AbstractInvokable parentTask,
+			TypeSerializerFactory<E> serializerFactory,
+			TypeComparator<E> comparator,
+			int numSortBuffers,
+			int maxNumFileHandles,
+			float startSpillingFraction,
+			boolean noSpillingMemory,
+			boolean handleLargeRecords,
+			boolean objectReuseEnabled,
+			InMemorySorterFactory<E> inMemorySorterFactory) throws IOException {
 		// sanity checks
-		if (memoryManager == null | (ioManager == null && !noSpillingMemory) | serializerFactory == null | comparator == null) {
+		if (memoryManager == null || (ioManager == null && !noSpillingMemory) || serializerFactory == null || comparator == null) {
 			throw new NullPointerException();
 		}
 		if (parentTask == null) {
@@ -216,7 +260,8 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 		}
 		
 		this.memoryManager = memoryManager;
-		
+		this.objectReuseEnabled = objectReuseEnabled;
+
 		// adjust the memory quotas to the page size
 		final int numPagesTotal = memory.size();
 
@@ -318,6 +363,8 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 		
 		// circular queues pass buffers between the threads
 		final CircularQueues<E> circularQueues = new CircularQueues<E>();
+
+		inMemorySorters = new ArrayList<>(numSortBuffers);
 		
 		// allocate the sort buffers and fill empty queue with them
 		final Iterator<MemorySegment> segments = this.sortReadMemory.iterator();
@@ -329,20 +376,11 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 				sortSegments.add(segments.next());
 			}
 			
-			final TypeComparator<E> comp = comparator.duplicate();
-			final InMemorySorter<E> buffer;
-			
-			// instantiate a fix-length in-place sorter, if possible, otherwise the out-of-place sorter
-			if (comp.supportsSerializationWithKeyNormalization() &&
-					serializer.getLength() > 0 && serializer.getLength() <= THRESHOLD_FOR_IN_PLACE_SORTING)
-			{
-				buffer = new FixedLengthRecordSorter<E>(serializerFactory.getSerializer(), comp, sortSegments);
-			} else {
-				buffer = new NormalizedKeySorter<E>(serializerFactory.getSerializer(), comp, sortSegments);
-			}
+			final InMemorySorter<E> inMemorySorter = inMemorySorterFactory.create(sortSegments);
+			inMemorySorters.add(inMemorySorter);
 
 			// add to empty queue
-			CircularElement<E> element = new CircularElement<E>(i, buffer);
+			CircularElement<E> element = new CircularElement<E>(i, inMemorySorter, sortSegments);
 			circularQueues.empty.add(element);
 		}
 
@@ -482,7 +520,12 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 			}
 		}
 		finally {
-			
+
+			// Dispose all in memory sorter in order to clear memory references
+			for (InMemorySorter<?> inMemorySorter : inMemorySorters) {
+				inMemorySorter.dispose();
+			}
+
 			// RELEASE ALL MEMORY. If the threads and channels are still running, this should cause
 			// exceptions, because their memory segments are freed
 			try {
@@ -686,15 +729,18 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 		
 		final int id;
 		final InMemorySorter<E> buffer;
+		final List<MemorySegment> memory;
 
 		public CircularElement() {
 			this.id = -1;
 			this.buffer = null;
+			this.memory = null;
 		}
 
-		public CircularElement(int id, InMemorySorter<E> buffer) {
+		public CircularElement(int id, InMemorySorter<E> buffer, List<MemorySegment> memory) {
 			this.id = id;
 			this.buffer = buffer;
+			this.memory = memory;
 		}
 	}
 
@@ -1199,7 +1245,7 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 		public void go() throws IOException {
 			
 			final Queue<CircularElement<E>> cache = new ArrayDeque<CircularElement<E>>();
-			CircularElement<E> element = null;
+			CircularElement<E> element;
 			boolean cacheOnly = false;
 			
 			// ------------------- In-Memory Cache ------------------------
@@ -1236,7 +1282,8 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 				
 				CircularElement<E> circElement;
 				while ((circElement = this.queues.empty.poll()) != null) {
-					memoryForLargeRecordSorting.addAll(circElement.buffer.dispose());
+					circElement.buffer.dispose();
+					memoryForLargeRecordSorting.addAll(circElement.memory);
 				}
 				
 				if (memoryForLargeRecordSorting.isEmpty()) {
@@ -1440,10 +1487,10 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 		protected final void disposeSortBuffers(boolean releaseMemory) {
 			while (!this.queues.empty.isEmpty()) {
 				try {
-					final InMemorySorter<?> sorter = this.queues.empty.take().buffer;
-					final List<MemorySegment> sorterMem = sorter.dispose();
+					CircularElement<E> element = this.queues.empty.take();
+					element.buffer.dispose();
 					if (releaseMemory) {
-						this.memManager.release(sorterMem);
+						this.memManager.release(element.memory);
 					}
 				}
 				catch (InterruptedException iex) {
@@ -1591,10 +1638,17 @@ public class UnilateralSortMerger<E> implements Sorter<E> {
 																			this.memManager.getPageSize());
 
 			// read the merged stream and write the data back
-			final TypeSerializer<E> serializer = this.serializer;
-			E rec = serializer.createInstance();
-			while ((rec = mergeIterator.next(rec)) != null) {
-				serializer.serialize(rec, output);
+			if (objectReuseEnabled) {
+				final TypeSerializer<E> serializer = this.serializer;
+				E rec = serializer.createInstance();
+				while ((rec = mergeIterator.next(rec)) != null) {
+					serializer.serialize(rec, output);
+				}
+			} else {
+				E rec;
+				while ((rec = mergeIterator.next()) != null) {
+					serializer.serialize(rec, output);
+				}
 			}
 			output.close();
 			final int numBlocksWritten = output.getBlockCount();

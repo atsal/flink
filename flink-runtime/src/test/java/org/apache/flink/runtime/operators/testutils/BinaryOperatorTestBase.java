@@ -30,12 +30,15 @@ import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
-import org.apache.flink.runtime.operators.PactDriver;
-import org.apache.flink.runtime.operators.PactTaskContext;
-import org.apache.flink.runtime.operators.ResettablePactDriver;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
+import org.apache.flink.runtime.operators.Driver;
+import org.apache.flink.runtime.operators.ResettableDriver;
+import org.apache.flink.runtime.operators.TaskContext;
 import org.apache.flink.runtime.operators.sort.UnilateralSortMerger;
 import org.apache.flink.runtime.operators.util.TaskConfig;
 import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
+import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
 import org.apache.flink.util.TestLogger;
@@ -51,7 +54,7 @@ import java.util.LinkedList;
 import java.util.List;
 
 @RunWith(Parameterized.class)
-public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements PactTaskContext<S, OUT> {
+public abstract class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLogger implements TaskContext<S, OUT> {
 	
 	protected static final int PAGE_SIZE = 32 * 1024;
 	
@@ -81,7 +84,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	
 	private S stub;
 	
-	private PactDriver<S, IN> driver;
+	private Driver<S, IN> driver;
 	
 	private volatile boolean running = true;
 	
@@ -108,7 +111,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		this.owner = new DummyInvokable();
 		this.taskConfig = new TaskConfig(new Configuration());
 		this.executionConfig = executionConfig;
-		this.taskManageInfo = new TaskManagerRuntimeInfo("localhost", new Configuration());
+		this.taskManageInfo = new TestingTaskManagerRuntimeInfo();
 	}
 	
 	@Parameterized.Parameters
@@ -147,7 +150,9 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 				comp,
 				this.perSortFractionMem,
 				32,
-				0.8f
+				0.8f,
+				true /*use large record handler*/,
+				false
 		);
 		this.sorters.add(sorter);
 		this.inputs.add(null);
@@ -175,12 +180,12 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	}
 	
 	@SuppressWarnings("rawtypes")
-	public void testDriver(PactDriver driver, Class stubClass) throws Exception {
+	public void testDriver(Driver driver, Class stubClass) throws Exception {
 		testDriverInternal(driver, stubClass);
 	}
 	
 	@SuppressWarnings({"unchecked", "rawtypes"})
-	public void testDriverInternal(PactDriver driver, Class stubClass) throws Exception {
+	public void testDriverInternal(Driver driver, Class stubClass) throws Exception {
 		
 		this.driver = driver;
 		driver.setup(this);
@@ -231,8 +236,8 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 			}
 			
 			// if resettable driver invoke tear down
-			if (this.driver instanceof ResettablePactDriver) {
-				final ResettablePactDriver<?, ?> resDriver = (ResettablePactDriver<?, ?>) this.driver;
+			if (this.driver instanceof ResettableDriver) {
+				final ResettableDriver<?, ?> resDriver = (ResettableDriver<?, ?>) this.driver;
 				try {
 					resDriver.teardown();
 				} catch (Throwable t) {
@@ -251,7 +256,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	}
 	
 	@SuppressWarnings({"unchecked", "rawtypes"})
-	public void testResettableDriver(ResettablePactDriver driver, Class stubClass, int iterations) throws Exception {
+	public void testResettableDriver(ResettableDriver driver, Class stubClass, int iterations) throws Exception {
 		driver.setup(this);
 		
 		for (int i = 0; i < iterations; i++) {
@@ -356,7 +361,7 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 	}
 	
 	@Override
-	public AbstractInvokable getOwningNepheleTask() {
+	public AbstractInvokable getContainingTask() {
 		return this.owner;
 	}
 	
@@ -365,6 +370,11 @@ public class BinaryOperatorTestBase<S extends Function, IN, OUT> extends TestLog
 		return "Driver Tester: " + message;
 	}
 	
+	@Override
+	public OperatorMetricGroup getMetricGroup() {
+		return UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup();
+	}
+
 	// --------------------------------------------------------------------------------------------
 	
 	@After

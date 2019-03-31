@@ -25,7 +25,7 @@ under the License.
 	<parent>
 		<groupId>org.apache.flink</groupId>
 		<artifactId>flink-parent</artifactId>
-		<version>0.10-SNAPSHOT</version>
+		<version>1.9-SNAPSHOT</version>
 		<relativePath>..</relativePath>
 	</parent>
 
@@ -35,26 +35,42 @@ under the License.
 	<packaging>pom</packaging>
 
 	<modules>
-		<module>${shading-artifact.name}</module>
+		<module>flink-shaded-hadoop2</module>
+		<module>flink-shaded-hadoop2-uber</module>
+		<module>flink-shaded-yarn-tests</module>
 	</modules>
 
-	<profiles>
-		<profile>
-			<id>include-yarn</id>
-			<activation>
-				<property>
-					<!-- Please do not remove the 'hadoop2' comment. See ./tools/generate_specific_pom.sh -->
-					<!--hadoop2--><name>!hadoop.profile</name>
-				</property>
-			</activation>
-			<modules>
-				<module>flink-shaded-include-yarn-tests</module>
-			</modules>
-		</profile>
-	</profiles>
+	<dependencies>
+		<!-- drop dependencies that are already provided by Flink from the shaded / uber jars -->
+		<dependency>
+			<groupId>com.google.code.findbugs</groupId>
+			<artifactId>jsr305</artifactId>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+			<scope>provided</scope>
+		</dependency>
+	</dependencies>
 
 	<build>
 		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-enforcer-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>dependency-convergence</id>
+						<goals>
+							<goal>enforce</goal>
+						</goals>
+						<configuration>
+							<skip>true</skip>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
 			<!-- Relocate the Hadoop's Guava dependency into a different namespace and
 			put Hadoop into a fat-jar.
 			-->
@@ -62,6 +78,12 @@ under the License.
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
 				<executions>
+					<execution>
+						<!--Disable shade-flink execution to avoid duplicate relocation of
+						dependencies-->
+						<id>shade-flink</id>
+						<phase>none</phase>
+					</execution>
 					<execution>
 						<id>shade-hadoop</id>
 						<phase>package</phase>
@@ -72,6 +94,7 @@ under the License.
 							<shadedArtifactAttached>false</shadedArtifactAttached>
 							<createDependencyReducedPom>true</createDependencyReducedPom>
 							<dependencyReducedPomLocation>${project.basedir}/target/dependency-reduced-pom.xml</dependencyReducedPomLocation>
+							<promoteTransitiveDependencies>true</promoteTransitiveDependencies>
 							<filters>
 								<!-- Exclude signatures -->
 								<filter>
@@ -83,17 +106,43 @@ under the License.
 									</excludes>
 								</filter>
 								<filter>
-									<artifact>org.slf4j:*</artifact>
+									<artifact>commons-httpclient:commons-httpclient</artifact>
 									<excludes>
-										<exclude>org/slf4j/impl/StaticLoggerBinder*</exclude>
+										<exclude>META-INF/LICENSE.txt</exclude>
 									</excludes>
 								</filter>
 							</filters>
 							<transformers>
 								<!-- The service transformer is needed to merge META-INF/services files -->
 								<transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-								<transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer"/>
+								<!-- The ApacheNoticeResourceTransformer collects and aggregates NOTICE files -->
+								<transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
+									<projectName>Apache Flink</projectName>
+								</transformer>
 							</transformers>
+							<artifactSet>
+								<includes>
+									<include>com.google.guava:*</include>
+									<include>com.google.protobuf:*</include>
+									<include>com.google.code.findbugs:*</include>
+									<include>asm:asm</include>
+									<include>io.netty:netty:*</include>
+									<include>io.netty:netty-all:*</include>
+									<include>org.apache.curator:*</include>
+									<include>org.apache.hadoop:*</include>
+									<include>org.htrace:htrace-core</include>
+
+									<!-- This dependency needs to be included to properly get rid of the HTTP Components dependency -->
+									<include>net.java.dev.jets3t:jets3t</include>
+									<include>org.apache.httpcomponents:*</include>
+									<include>commons-httpclient:commons-httpclient</include>
+									<include>org.codehaus.jackson:*</include>
+								</includes>
+								<excludes>
+									<exclude>org.slf4j:*</exclude>
+									<exclude>log4j:*</exclude>
+								</excludes>
+							</artifactSet>
 							<relocations>
 								<relocation>
 									<pattern>com.google</pattern>
@@ -111,14 +160,35 @@ under the License.
 									<shadedPattern>org.apache.flink.hadoop.shaded.org.jboss.netty</shadedPattern>
 								</relocation>
 								<relocation>
+									<pattern>io.netty</pattern>
+									<shadedPattern>org.apache.flink.hadoop.shaded.io.netty</shadedPattern>
+								</relocation>
+								<relocation>
 									<pattern>org.apache.curator</pattern>
 									<shadedPattern>org.apache.flink.hadoop.shaded.org.apache.curator</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.apache.http</pattern>
+									<shadedPattern>org.apache.flink.hadoop.shaded.org.apache.http</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.apache.commons.httpclient</pattern>
+									<shadedPattern>org.apache.flink.hadoop.shaded.org.apache.commons.httpclient</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.htrace</pattern>
+									<shadedPattern>org.apache.flink.hadoop.shaded.org.htrace</shadedPattern>
+								</relocation>
+								<relocation>
+									<pattern>org.codehaus.jackson</pattern>
+									<shadedPattern>org.apache.flink.hadoop.shaded.org.codehaus.jackson</shadedPattern>
 								</relocation>
 							</relocations>
 						</configuration>
 					</execution>
 				</executions>
 			</plugin>
+
 		</plugins>
 	</build>
 

@@ -23,11 +23,12 @@ import org.apache.flink.runtime.io.network.partition.ResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
 import org.apache.flink.runtime.jobgraph.IntermediateDataSetID;
 import org.apache.flink.runtime.jobgraph.IntermediateResultPartitionID;
+import org.apache.flink.runtime.state.KeyGroupRangeAssignment;
 
 import java.io.Serializable;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /**
  * Deployment descriptor for a result partition.
@@ -35,6 +36,8 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * @see ResultPartition
  */
 public class ResultPartitionDeploymentDescriptor implements Serializable {
+
+	private static final long serialVersionUID = 6343547936086963705L;
 
 	/** The ID of the result this partition belongs to. */
 	private final IntermediateDataSetID resultId;
@@ -48,18 +51,29 @@ public class ResultPartitionDeploymentDescriptor implements Serializable {
 	/** The number of subpartitions. */
 	private final int numberOfSubpartitions;
 
+	/** The maximum parallelism. */
+	private final int maxParallelism;
+
+	/** Flag whether the result partition should send scheduleOrUpdateConsumer messages. */
+	private final boolean sendScheduleOrUpdateConsumersMessage;
+
 	public ResultPartitionDeploymentDescriptor(
 			IntermediateDataSetID resultId,
 			IntermediateResultPartitionID partitionId,
 			ResultPartitionType partitionType,
-			int numberOfSubpartitions) {
+			int numberOfSubpartitions,
+			int maxParallelism,
+			boolean lazyScheduling) {
 
 		this.resultId = checkNotNull(resultId);
 		this.partitionId = checkNotNull(partitionId);
 		this.partitionType = checkNotNull(partitionType);
 
+		KeyGroupRangeAssignment.checkParallelismPreconditions(maxParallelism);
 		checkArgument(numberOfSubpartitions >= 1);
 		this.numberOfSubpartitions = numberOfSubpartitions;
+		this.maxParallelism = maxParallelism;
+		this.sendScheduleOrUpdateConsumersMessage = lazyScheduling;
 	}
 
 	public IntermediateDataSetID getResultId() {
@@ -78,6 +92,14 @@ public class ResultPartitionDeploymentDescriptor implements Serializable {
 		return numberOfSubpartitions;
 	}
 
+	public int getMaxParallelism() {
+		return maxParallelism;
+	}
+
+	public boolean sendScheduleOrUpdateConsumersMessage() {
+		return sendScheduleOrUpdateConsumersMessage;
+	}
+
 	@Override
 	public String toString() {
 		return String.format("ResultPartitionDeploymentDescriptor [result id: %s, "
@@ -87,7 +109,8 @@ public class ResultPartitionDeploymentDescriptor implements Serializable {
 
 	// ------------------------------------------------------------------------
 
-	public static ResultPartitionDeploymentDescriptor from(IntermediateResultPartition partition) {
+	public static ResultPartitionDeploymentDescriptor from(
+			IntermediateResultPartition partition, int maxParallelism, boolean lazyScheduling) {
 
 		final IntermediateDataSetID resultId = partition.getIntermediateResult().getId();
 		final IntermediateResultPartitionID partitionId = partition.getPartitionId();
@@ -102,13 +125,13 @@ public class ResultPartitionDeploymentDescriptor implements Serializable {
 		if (!partition.getConsumers().isEmpty() && !partition.getConsumers().get(0).isEmpty()) {
 
 			if (partition.getConsumers().size() > 1) {
-				new IllegalStateException("Currently, only a single consumer group per partition is supported.");
+				throw new IllegalStateException("Currently, only a single consumer group per partition is supported.");
 			}
 
 			numberOfSubpartitions = partition.getConsumers().get(0).size();
 		}
 
 		return new ResultPartitionDeploymentDescriptor(
-				resultId, partitionId, partitionType, numberOfSubpartitions);
+				resultId, partitionId, partitionType, numberOfSubpartitions, maxParallelism, lazyScheduling);
 	}
 }

@@ -18,10 +18,6 @@
 
 package org.apache.flink.test.classloading.jar;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.io.InputFormat;
 import org.apache.flink.api.common.io.statistics.BaseStatistics;
@@ -36,18 +32,19 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.core.io.InputSplitAssigner;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Test class used by the {@link org.apache.flink.test.classloading.ClassLoaderITCase}.
+ */
 @SuppressWarnings("serial")
 public class CustomInputSplitProgram {
-	
+
 	public static void main(String[] args) throws Exception {
-		
-		final String jarFile = args[0];
-		final String host = args[1];
-		final int port = Integer.parseInt(args[2]);
-		final int parallelism = Integer.parseInt(args[3]);
-		
-		ExecutionEnvironment env = ExecutionEnvironment.createRemoteEnvironment(host, port, jarFile);
-		env.setParallelism(parallelism);
+
+		ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
 		env.getConfig().disableSysoutLogging();
 
 		DataSet<Integer> data = env.createInput(new CustomInputFormat());
@@ -59,13 +56,13 @@ public class CustomInputSplitProgram {
 					return new Tuple2<Integer, Double>(value, value * 0.5);
 				}
 			})
-			.output(new DiscardingOutputFormat<Tuple2<Integer,Double>>());
+			.output(new DiscardingOutputFormat<Tuple2<Integer, Double>>());
 
 		env.execute();
 	}
 	// --------------------------------------------------------------------------------------------
-	
-	public static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
+
+	private static final class CustomInputFormat implements InputFormat<Integer, CustomInputSplit>, ResultTypeQueryable<Integer> {
 
 		private static final long serialVersionUID = 1L;
 
@@ -119,7 +116,7 @@ public class CustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomInputSplit implements InputSplit {
+	private static final class CustomInputSplit implements InputSplit {
 
 		private static final long serialVersionUID = 1L;
 
@@ -135,7 +132,7 @@ public class CustomInputSplitProgram {
 		}
 	}
 
-	public static final class CustomSplitAssigner implements InputSplitAssigner {
+	private static final class CustomSplitAssigner implements InputSplitAssigner {
 
 		private final List<CustomInputSplit> remainingSplits;
 

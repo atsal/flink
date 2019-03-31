@@ -19,6 +19,8 @@
 package org.apache.flink.runtime.leaderelection;
 
 import org.apache.flink.runtime.leaderretrieval.LeaderRetrievalListener;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
@@ -28,6 +30,7 @@ import java.util.concurrent.TimeoutException;
  * testing purposes.
  */
 public class TestingListener implements LeaderRetrievalListener {
+	private static Logger LOG = LoggerFactory.getLogger(TestingListener.class);
 
 	private String address;
 	private String oldAddress;
@@ -44,42 +47,15 @@ public class TestingListener implements LeaderRetrievalListener {
 		return leaderSessionID;
 	}
 
-	public void clear() {
-		address = null;
-		leaderSessionID = null;
-	}
-
-	public void waitForLeader(long timeout) throws Exception {
+	public String waitForNewLeader(long timeout) throws Exception {
 		long start = System.currentTimeMillis();
 		long curTimeout;
 
-		while (exception == null && address == null && (curTimeout = timeout - System.currentTimeMillis() + start) > 0) {
-			synchronized (lock) {
-				try {
-					lock.wait(curTimeout);
-				} catch (InterruptedException e) {
-					// we got interrupted so check again for the condition
-				}
-			}
-		}
-
-		if (exception != null) {
-			throw exception;
-		} else if (address == null) {
-			throw new TimeoutException("Listener was not notified about a leader within " +
-					timeout + "ms");
-		}
-	}
-
-	public void waitForNewLeader(long timeout) throws Exception {
-		long start = System.currentTimeMillis();
-		long curTimeout;
-
-		while (
+		synchronized (lock) {
+			while (
 				exception == null &&
-				(address == null || address.equals(oldAddress)) &&
-				(curTimeout = timeout - System.currentTimeMillis() + start) > 0) {
-			synchronized (lock) {
+					(address == null || address.equals(oldAddress)) &&
+					(curTimeout = timeout - System.currentTimeMillis() + start) > 0) {
 				try {
 					lock.wait(curTimeout);
 				} catch (InterruptedException e) {
@@ -96,11 +72,15 @@ public class TestingListener implements LeaderRetrievalListener {
 		}
 
 		oldAddress = address;
+
+		return address;
 	}
 
 	@Override
 	public void notifyLeaderAddress(String leaderAddress, UUID leaderSessionID) {
 		synchronized (lock) {
+			LOG.debug("Notified about new leader address {} with session ID {}.", leaderAddress, leaderSessionID);
+
 			this.address = leaderAddress;
 			this.leaderSessionID = leaderSessionID;
 

@@ -18,87 +18,46 @@
 
 package org.apache.flink.runtime.io.network.api.writer;
 
-import org.apache.flink.runtime.event.AbstractEvent;
-import org.apache.flink.runtime.event.TaskEvent;
-import org.apache.flink.runtime.io.network.api.EndOfSuperstepEvent;
-import org.apache.flink.runtime.io.network.api.TaskEventHandler;
-import org.apache.flink.runtime.io.network.api.serialization.EventSerializer;
-import org.apache.flink.runtime.io.network.buffer.Buffer;
+import org.apache.flink.runtime.io.network.buffer.BufferConsumer;
 import org.apache.flink.runtime.io.network.buffer.BufferProvider;
-import org.apache.flink.runtime.io.network.partition.ResultPartition;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
-import org.apache.flink.runtime.util.event.EventListener;
 
 import java.io.IOException;
 
 /**
- * A buffer-oriented runtime result writer.
- * <p>
- * The {@link ResultPartitionWriter} is the runtime API for producing results. It
- * supports two kinds of data to be sent: buffers and events.
+ * A buffer-oriented runtime result writer API for producing results.
  */
-public final class ResultPartitionWriter implements EventListener<TaskEvent> {
+public interface ResultPartitionWriter extends AutoCloseable {
 
-	private final ResultPartition partition;
+	BufferProvider getBufferProvider();
 
-	private final TaskEventHandler taskEventHandler = new TaskEventHandler();
+	ResultPartitionID getPartitionId();
 
-	public ResultPartitionWriter(ResultPartition partition) {
-		this.partition = partition;
-	}
+	int getNumberOfSubpartitions();
 
-	// ------------------------------------------------------------------------
-	// Attributes
-	// ------------------------------------------------------------------------
+	int getNumTargetKeyGroups();
 
-	public ResultPartitionID getPartitionId() {
-		return partition.getPartitionId();
-	}
+	/**
+	 * Adds the bufferConsumer to the subpartition with the given index.
+	 *
+	 * <p>For PIPELINED {@link org.apache.flink.runtime.io.network.partition.ResultPartitionType}s,
+	 * this will trigger the deployment of consuming tasks after the first buffer has been added.
+	 *
+	 * <p>This method takes the ownership of the passed {@code bufferConsumer} and thus is responsible for releasing
+	 * it's resources.
+	 *
+	 * <p>To avoid problems with data re-ordering, before adding new {@link BufferConsumer} the previously added one
+	 * the given {@code subpartitionIndex} must be marked as {@link BufferConsumer#isFinished()}.
+	 */
+	void addBufferConsumer(BufferConsumer bufferConsumer, int subpartitionIndex) throws IOException;
 
-	public BufferProvider getBufferProvider() {
-		return partition.getBufferProvider();
-	}
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in all subpartitions.
+	 */
+	void flushAll();
 
-	public int getNumberOfOutputChannels() {
-		return partition.getNumberOfSubpartitions();
-	}
-
-	// ------------------------------------------------------------------------
-	// Data processing
-	// ------------------------------------------------------------------------
-
-	public void writeBuffer(Buffer buffer, int targetChannel) throws IOException {
-		partition.add(buffer, targetChannel);
-	}
-
-	public void writeEvent(AbstractEvent event, int targetChannel) throws IOException {
-		partition.add(EventSerializer.toBuffer(event), targetChannel);
-	}
-
-	public void writeEventToAllChannels(AbstractEvent event) throws IOException {
-		for (int i = 0; i < partition.getNumberOfSubpartitions(); i++) {
-			Buffer buffer = EventSerializer.toBuffer(event);
-			partition.add(buffer, i);
-		}
-	}
-
-	public void writeEndOfSuperstep() throws IOException {
-		for (int i = 0; i < partition.getNumberOfSubpartitions(); i++) {
-			Buffer buffer = EventSerializer.toBuffer(EndOfSuperstepEvent.INSTANCE);
-			partition.add(buffer, i);
-		}
-	}
-
-	// ------------------------------------------------------------------------
-	// Event handling
-	// ------------------------------------------------------------------------
-
-	public void subscribeToEvent(EventListener<TaskEvent> eventListener, Class<? extends TaskEvent> eventType) {
-		taskEventHandler.subscribe(eventListener, eventType);
-	}
-
-	@Override
-	public void onEvent(TaskEvent event) {
-		taskEventHandler.publish(event);
-	}
+	/**
+	 * Manually trigger consumption from enqueued {@link BufferConsumer BufferConsumers} in one specified subpartition.
+	 */
+	void flush(int subpartitionIndex);
 }

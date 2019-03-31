@@ -25,6 +25,14 @@ import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.MemorySegment;
 import org.apache.flink.core.memory.MemoryType;
+import org.apache.flink.runtime.io.disk.ChannelReaderInputViewIterator;
+import org.apache.flink.runtime.io.disk.iomanager.BlockChannelReader;
+import org.apache.flink.runtime.io.disk.iomanager.BlockChannelWriter;
+import org.apache.flink.runtime.io.disk.iomanager.ChannelReaderInputView;
+import org.apache.flink.runtime.io.disk.iomanager.ChannelWriterOutputView;
+import org.apache.flink.runtime.io.disk.iomanager.FileIOChannel;
+import org.apache.flink.runtime.io.disk.iomanager.IOManager;
+import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.memory.MemoryManager;
 import org.apache.flink.runtime.operators.testutils.DummyInvokable;
 import org.apache.flink.runtime.operators.testutils.RandomIntPairGenerator;
@@ -33,14 +41,12 @@ import org.apache.flink.runtime.operators.testutils.types.IntPair;
 import org.apache.flink.runtime.operators.testutils.types.IntPairComparator;
 import org.apache.flink.runtime.operators.testutils.types.IntPairSerializer;
 import org.apache.flink.util.MutableObjectIterator;
+
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-/**
- * 
- */
 public class FixedLengthRecordSorterTest {
 	
 	private static final long SEED = 649180756312423613L;
@@ -50,6 +56,8 @@ public class FixedLengthRecordSorterTest {
 	private static final int MEMORY_PAGE_SIZE = 32 * 1024; 
 
 	private MemoryManager memoryManager;
+
+	private IOManager ioManager;
 	
 	private TypeSerializer<IntPair> serializer;
 	
@@ -59,6 +67,7 @@ public class FixedLengthRecordSorterTest {
 	@Before
 	public void beforeTest() {
 		this.memoryManager = new MemoryManager(MEMORY_SIZE, 1, MEMORY_PAGE_SIZE, MemoryType.HEAP, true);
+		this.ioManager = new IOManagerAsync();
 		this.serializer = new IntPairSerializer();
 		this.comparator = new IntPairComparator();
 	}
@@ -67,6 +76,11 @@ public class FixedLengthRecordSorterTest {
 	public void afterTest() {
 		if (!this.memoryManager.verifyEmpty()) {
 			Assert.fail("Memory Leak: Some memory has not been returned to the memory manager.");
+		}
+
+		if (this.ioManager != null) {
+			ioManager.shutdown();
+			ioManager = null;
 		}
 		
 		if (this.memoryManager != null) {
@@ -125,7 +139,8 @@ public class FixedLengthRecordSorterTest {
 //		System.out.println("RECORDS " + num);
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 	
 	@Test
@@ -170,7 +185,8 @@ public class FixedLengthRecordSorterTest {
 		Assert.assertEquals("Incorrect number of records", num, count);
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 	
 	@Test
@@ -225,7 +241,8 @@ public class FixedLengthRecordSorterTest {
 		}
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 	
 	/**
@@ -276,7 +293,8 @@ public class FixedLengthRecordSorterTest {
 		}
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 	
 	/**
@@ -318,7 +336,8 @@ public class FixedLengthRecordSorterTest {
 		}
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 	
 	@Test
@@ -345,11 +364,10 @@ public class FixedLengthRecordSorterTest {
 		MutableObjectIterator<IntPair> iter = sorter.getIterator();
 		IntPair readTarget = new IntPair();
 		
-		int current = 0;
-		int last = 0;
+		int current;
+		int last;
 		
 		iter.next(readTarget);
-		//readTarget.getFieldInto(0, last);
 		last = readTarget.getKey();
 		
 		while ((readTarget = iter.next(readTarget)) != null) {
@@ -359,13 +377,109 @@ public class FixedLengthRecordSorterTest {
 			if (cmp > 0) {
 				Assert.fail("Next key is not larger or equal to previous key.");
 			}
-			
-			int tmp = current;
-			current = last;
-			last = tmp;
+			last = current;
 		}
 		
 		// release the memory occupied by the buffers
-		this.memoryManager.release(sorter.dispose());
+		sorter.dispose();
+		this.memoryManager.release(memory);
+	}
+
+	@Test
+	public void testFlushFullMemoryPage() throws Exception {
+		// Insert IntPair which would fill 2 memory pages.
+		final int NUM_RECORDS = 2 * MEMORY_PAGE_SIZE / 8;
+		final List<MemorySegment> memory = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+
+		FixedLengthRecordSorter<IntPair> sorter = newSortBuffer(memory);
+		UniformIntPairGenerator generator = new UniformIntPairGenerator(Integer.MAX_VALUE, 1, false);
+
+		// write the records
+		IntPair record = new IntPair();
+		int num = -1;
+		do {
+			generator.next(record);
+			num++;
+		}
+		while (sorter.write(record) && num < NUM_RECORDS);
+
+		FileIOChannel.ID channelID = this.ioManager.createChannelEnumerator().next();
+		BlockChannelWriter<MemorySegment> blockChannelWriter = this.ioManager.createBlockChannelWriter(channelID);
+		final List<MemorySegment> writeBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelWriterOutputView outputView = new ChannelWriterOutputView(blockChannelWriter, writeBuffer, writeBuffer.get(0).size());
+
+		sorter.writeToOutput(outputView, 0, NUM_RECORDS);
+
+		this.memoryManager.release(outputView.close());
+
+		BlockChannelReader<MemorySegment> blockChannelReader = this.ioManager.createBlockChannelReader(channelID);
+		final List<MemorySegment> readBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelReaderInputView readerInputView = new ChannelReaderInputView(blockChannelReader, readBuffer, false);
+		final List<MemorySegment> dataBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelReaderInputViewIterator<IntPair> iterator = new ChannelReaderInputViewIterator(readerInputView, dataBuffer, this.serializer);
+
+		record = iterator.next(record);
+		int i =0;
+		while (record != null) {
+			Assert.assertEquals(i, record.getKey());
+			record = iterator.next(record);
+			i++;
+		}
+
+		Assert.assertEquals(NUM_RECORDS, i);
+
+		this.memoryManager.release(dataBuffer);
+		// release the memory occupied by the buffers
+		sorter.dispose();
+		this.memoryManager.release(memory);
+	}
+
+	@Test
+	public void testFlushPartialMemoryPage() throws Exception {
+		// Insert IntPair which would fill 2 memory pages.
+		final int NUM_RECORDS = 2 * MEMORY_PAGE_SIZE / 8;
+		final List<MemorySegment> memory = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+
+		FixedLengthRecordSorter<IntPair> sorter = newSortBuffer(memory);
+		UniformIntPairGenerator generator = new UniformIntPairGenerator(Integer.MAX_VALUE, 1, false);
+
+		// write the records
+		IntPair record = new IntPair();
+		int num = -1;
+		do {
+			generator.next(record);
+			num++;
+		}
+		while (sorter.write(record) && num < NUM_RECORDS);
+
+		FileIOChannel.ID channelID = this.ioManager.createChannelEnumerator().next();
+		BlockChannelWriter<MemorySegment> blockChannelWriter = this.ioManager.createBlockChannelWriter(channelID);
+		final List<MemorySegment> writeBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelWriterOutputView outputView = new ChannelWriterOutputView(blockChannelWriter, writeBuffer, writeBuffer.get(0).size());
+
+		sorter.writeToOutput(outputView, 1, NUM_RECORDS - 1);
+
+		this.memoryManager.release(outputView.close());
+
+		BlockChannelReader<MemorySegment> blockChannelReader = this.ioManager.createBlockChannelReader(channelID);
+		final List<MemorySegment> readBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelReaderInputView readerInputView = new ChannelReaderInputView(blockChannelReader, readBuffer, false);
+		final List<MemorySegment> dataBuffer = this.memoryManager.allocatePages(new DummyInvokable(), 3);
+		ChannelReaderInputViewIterator<IntPair> iterator = new ChannelReaderInputViewIterator(readerInputView, dataBuffer, this.serializer);
+
+		record = iterator.next(record);
+		int i =1;
+		while (record != null) {
+			Assert.assertEquals(i, record.getKey());
+			record = iterator.next(record);
+			i++;
+		}
+
+		Assert.assertEquals(NUM_RECORDS, i);
+
+		this.memoryManager.release(dataBuffer);
+		// release the memory occupied by the buffers
+		sorter.dispose();
+		this.memoryManager.release(memory);
 	}
 }

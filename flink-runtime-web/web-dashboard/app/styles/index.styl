@@ -21,6 +21,25 @@
 sidebar-width = 250px
 sidebar-width-small = 160px
 
+html
+  height: 100%
+
+body
+  height: 100%
+
+#main
+  height: 100%
+
+.gutter
+  background-color: transparent
+  background-repeat: no-repeat
+  background-position: 50%
+
+.gutter-vertical
+  cursor: row-resize
+  background-image: url('../images/grips/horizontal.png')
+
+
 #sidebar
   overflow: hidden
   position: fixed
@@ -54,11 +73,11 @@ sidebar-width-small = 160px
     font-weight: bold
     color: #ffffff
     padding-left: 0
-    
+
   .nav > li > a
     color: #aaaaaa
     margin-bottom: 1px
-    
+
     &:hover, &:focus
       background-color: rgba(40, 40, 40, 0.5)
     &.active
@@ -66,9 +85,9 @@ sidebar-width-small = 160px
 
 #content
   background-color: #ffffff
-  overflow: hidden
   margin-left: 0
   padding-top: 70px
+  height: 100%
 
   transition(400ms cubic-bezier(0.250, 0.250, 0.750, 0.750) all)
 
@@ -82,7 +101,7 @@ sidebar-width-small = 160px
     .nav-tabs
       margin: 0 -20px
       padding: 0 20px
-      
+
   .navbar-secondary-additional
     border: none
     padding: 0 20px
@@ -114,7 +133,7 @@ sidebar-width-small = 160px
       color: #aaaaaa
       background-color: transparent
       border-bottom: 2px solid transparent
-      
+
     &.active
       > a, > a:hover, > a:focus
         color: #000000
@@ -124,10 +143,13 @@ sidebar-width-small = 160px
     margin-bottom: 20px
 
 .table
+  .table
+    background-color: transparent
+
   th
     font-weight: normal
     color: #999999
-    
+
   td.td-long
     width: 20%
     white-space: pre-wrap
@@ -139,9 +161,123 @@ sidebar-width-small = 160px
   &.table-clickable
     tr
       cursor: pointer
-        
+
   &.table-inner
     background-color: transparent
+
+  &.table-properties
+    table-layout: fixed
+    white-space: nowrap
+    td
+      width: 50%
+      white-space: nowrap
+      overflow: hidden
+      text-overflow: ellipsis
+
+  &.table-body-hover
+    > tbody
+      border-top: none
+      border-left: 2px solid transparent
+      &.active
+        border-left: 2px solid #000000
+      &:hover, &.active
+        td:not(.tab-column)
+          background-color: #f0f0f0
+        td.tab-column li.active
+          background-color: #f0f0f0
+
+  &.table-activable
+    th.tab-column, td.tab-column
+      border-top: none
+      width: 47px
+
+    td.tab-column
+      border-right: 1px solid #dddddd
+
+    td
+      position: relative
+
+  &.table-no-border
+    th
+      border-top: none !important
+    td
+      border-top: none !important
+
+  &#job-submit-table
+    table-layout: fixed
+    white-space: nowrap
+    td.td-large
+      width: 40%
+    td
+      width: 15%
+      > input
+        height: 28px
+        font-size: 14px
+      > span.btn
+        padding: 2px 4px
+        font-size: 14px
+
+  &#add-file-table
+    table-layout: fixed
+
+    span.btn
+      position: relative
+      overflow: hidden
+      padding: 2px 4px
+      font-size: 14px
+      border-radius: 2px
+      margin-top: -3px
+
+    td#add-file-button
+      width: 100px
+
+      input[type=file]
+        position: absolute
+        top: 0
+        right: 0
+        min-width: 100%
+        min-height: 100%
+        filter: unquote("alpha(opacity=0)")
+        opacity: 0
+        outline: none
+        cursor: inherit
+        display: block
+
+    td#add-file-name
+      width: 250px
+      text-overflow: ellipsis
+      overflow: hidden
+      white-space: nowrap
+
+    td#add-file-status
+      width: 100%
+
+      span.btn-progress-bar
+        padding: 0 !important
+        width: 100%
+        background-color: #f5f5f5
+        text-align: left
+      span.btn-progress
+        padding: 2px 2px
+        font-size: 10px
+
+
+  span.error-area
+    color: red
+
+  span.row-button
+    padding: 1px 2px
+    margin: 0
+    border: none !important
+
+  .small-label
+    text-transform: uppercase
+    font-size: 13px
+    color: #999999
+
+span.icon-wrapper
+  width: 1.2em
+  display: inline-block
 
 .panel
   &.panel-dashboard
@@ -157,7 +293,7 @@ sidebar-width-small = 160px
   overflow: auto
 
 .navbar-main, .navbar-secondary, .navbar-main-additional, .panel.panel-multi, .navbar-secondary-additional
-  .navbar-title, .panel-title
+  .navbar-title, .navbar-title-job, .panel-title
     float: left
     font-size: 18px
     padding: 12px 20px 13px 10px
@@ -172,7 +308,7 @@ sidebar-width-small = 160px
     display: inline-block
     border-right: 1px solid #e7e7e7
     overflow: hidden
-    
+
     .overflow
       position: absolute
       display: block
@@ -190,7 +326,7 @@ sidebar-width-small = 160px
 .panel.panel-multi
   .panel-heading
     padding: 0
-    
+
     .panel-info
       &.thin
         padding: 8px 10px
@@ -200,7 +336,7 @@ sidebar-width-small = 160px
     background-color: #fdfdfd
     color: #999
     font-size: 13px
-    
+
     &.clean
       color: inherit
       font-size: inherit
@@ -223,7 +359,7 @@ sidebar-width-small = 160px
     padding-right: 20px
     background-color: #fff
     z-index: 1
-    
+
 
 .badge-default[href]:hover,
 .badge-default[href]:focus
@@ -289,6 +425,13 @@ pre.exception
   padding: 0
   margin: 0
 
+pre
+  white-space: pre-wrap
+  white-space: -moz-pre-wrap
+  white-space: -pre-wrap
+  white-space: -o-pre-wrap
+  word-wrap: break-word
+
 .nav-tabs
   &.tabs-vertical
     // float: right
@@ -302,7 +445,7 @@ pre.exception
       float: none
       margin-bottom: 0
       margin-right: -1px
-      
+
       > a
         margin-right: 0
         border-radius(0)
@@ -312,7 +455,7 @@ pre.exception
       > a:hover, > a:focus
         border-bottom: none
         border-left: 2px solid #000000
-        
+
       &.active
         > a
           border-bottom: none
@@ -322,15 +465,36 @@ pre.exception
   .navbar-title
     padding: 12px 20px 13px 20px
 
+.navbar-main
+  .navbar-title-job
+    padding: 8px 20px 8px 20px
+    .indicator-primary
+      padding: 8px 0 0 0
+    .no-padding
+      padding: 0
+    .no-margin
+      margin: 0
+    .job-name
+      font-size: 14px
+    .job-id
+      color: #999
+      font-size: 11px
+
+livechart
+  width: 30%
+  height: 30%
+  text-align: center
+
 @import './job'
 @import './graph'
 @import './timeline'
+@import './metric'
 
 @media (min-width: 1024px) and (max-width: 1279px)
   #sidebar
     left: 0
     width: sidebar-width-small
-    
+
     .navbar-static-top
       .navbar-brand-text
         display: none
@@ -364,3 +528,38 @@ pre.exception
   .table
     td.td-long
       width: 30%
+
+.legend-box
+  font-size: 10px
+  width: 2em
+
+#total-mem
+  background-color: #7cb5ec
+
+#heap-mem
+  background-color: #434348
+
+#non-heap-mem
+  background-color: #90ed7d
+
+.show-pointer
+  cursor: pointer
+
+#fetch-plan
+  width: 100px
+
+#job-submit
+  width: 100px
+
+#content-inner
+  height: 100%
+
+#job-panel
+  overflow-y: auto
+
+#details
+  height: 100%
+
+#node-details
+  height: 100%
+  

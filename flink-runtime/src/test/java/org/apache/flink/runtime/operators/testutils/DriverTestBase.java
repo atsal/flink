@@ -18,40 +18,44 @@
 
 package org.apache.flink.runtime.operators.testutils;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
-
 import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
-import org.apache.flink.util.TestLogger;
-import org.junit.Assert;
 import org.apache.flink.api.common.functions.Function;
 import org.apache.flink.api.common.functions.util.FunctionUtils;
 import org.apache.flink.api.common.typeutils.TypeComparator;
 import org.apache.flink.api.common.typeutils.TypeSerializerFactory;
-import org.apache.flink.api.common.typeutils.record.RecordComparator;
-import org.apache.flink.api.common.typeutils.record.RecordSerializerFactory;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.io.disk.iomanager.IOManager;
 import org.apache.flink.runtime.io.disk.iomanager.IOManagerAsync;
 import org.apache.flink.runtime.jobgraph.tasks.AbstractInvokable;
 import org.apache.flink.runtime.memory.MemoryManager;
-import org.apache.flink.runtime.operators.PactDriver;
-import org.apache.flink.runtime.operators.PactTaskContext;
-import org.apache.flink.runtime.operators.ResettablePactDriver;
+import org.apache.flink.runtime.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
+import org.apache.flink.runtime.operators.Driver;
+import org.apache.flink.runtime.operators.ResettableDriver;
+import org.apache.flink.runtime.operators.TaskContext;
 import org.apache.flink.runtime.operators.sort.UnilateralSortMerger;
 import org.apache.flink.runtime.operators.util.TaskConfig;
+import org.apache.flink.runtime.taskmanager.TaskManagerRuntimeInfo;
+import org.apache.flink.runtime.testutils.recordutils.RecordComparator;
+import org.apache.flink.runtime.testutils.recordutils.RecordSerializerFactory;
+import org.apache.flink.runtime.util.TestingTaskManagerRuntimeInfo;
 import org.apache.flink.types.Record;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.MutableObjectIterator;
+import org.apache.flink.util.TestLogger;
+
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedList;
+import java.util.List;
+
 @RunWith(Parameterized.class)
-public class DriverTestBase<S extends Function> extends TestLogger implements PactTaskContext<S, Record> {
+public abstract class DriverTestBase<S extends Function> extends TestLogger implements TaskContext<S, Record> {
 	
 	protected static final long DEFAULT_PER_SORT_MEM = 16 * 1024 * 1024;
 	
@@ -83,7 +87,7 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 	
 	private S stub;
 	
-	private PactDriver<S, Record> driver;
+	private Driver<S, Record> driver;
 	
 	private volatile boolean running = true;
 
@@ -112,7 +116,7 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 		this.owner = new DummyInvokable();
 		this.taskConfig = new TaskConfig(new Configuration());
 		this.executionConfig = executionConfig;
-		this.taskManageInfo = new TaskManagerRuntimeInfo("localhost", new Configuration());
+		this.taskManageInfo = new TestingTaskManagerRuntimeInfo();
 	}
 
 	@Parameterized.Parameters
@@ -142,7 +146,7 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 	public void addInputSorted(MutableObjectIterator<Record> input, RecordComparator comp) throws Exception {
 		UnilateralSortMerger<Record> sorter = new UnilateralSortMerger<Record>(
 				this.memManager, this.ioManager, input, this.owner, RecordSerializerFactory.get(), comp,
-				this.perSortFractionMem, 32, 0.8f);
+				this.perSortFractionMem, 32, 0.8f, true /*use large record handler*/, true);
 		this.sorters.add(sorter);
 		this.inputs.add(null);
 	}
@@ -168,12 +172,12 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 	}
 
 	@SuppressWarnings("rawtypes")
-	public void testDriver(PactDriver driver, Class stubClass) throws Exception {
+	public void testDriver(Driver driver, Class stubClass) throws Exception {
 		testDriverInternal(driver, stubClass);
 	}
 
 	@SuppressWarnings({"unchecked","rawtypes"})
-	public void testDriverInternal(PactDriver driver, Class stubClass) throws Exception {
+	public void testDriverInternal(Driver driver, Class stubClass) throws Exception {
 
 		this.driver = driver;
 		driver.setup(this);
@@ -226,8 +230,8 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 			}
 
 			// if resettable driver invoke tear down
-			if (this.driver instanceof ResettablePactDriver) {
-				final ResettablePactDriver<?, ?> resDriver = (ResettablePactDriver<?, ?>) this.driver;
+			if (this.driver instanceof ResettableDriver) {
+				final ResettableDriver<?, ?> resDriver = (ResettableDriver<?, ?>) this.driver;
 				try {
 					resDriver.teardown();
 				} catch (Throwable t) {
@@ -247,7 +251,7 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 	}
 
 	@SuppressWarnings({"unchecked","rawtypes"})
-	public void testResettableDriver(ResettablePactDriver driver, Class stubClass, int iterations) throws Exception {
+	public void testResettableDriver(ResettableDriver driver, Class stubClass, int iterations) throws Exception {
 
 		driver.setup(this);
 		
@@ -354,7 +358,7 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 	}
 
 	@Override
-	public AbstractInvokable getOwningNepheleTask() {
+	public AbstractInvokable getContainingTask() {
 		return this.owner;
 	}
 
@@ -363,6 +367,11 @@ public class DriverTestBase<S extends Function> extends TestLogger implements Pa
 		return "Driver Tester: " + message;
 	}
 	
+	@Override
+	public OperatorMetricGroup getMetricGroup() {
+		return UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup();
+	}
+
 	// --------------------------------------------------------------------------------------------
 	
 	@After

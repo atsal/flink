@@ -20,9 +20,10 @@ package org.apache.flink.test.checkpointing;
 
 import org.apache.flink.api.common.functions.RichFilterFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.state.OperatorState;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.checkpoint.Checkpointed;
+import org.apache.flink.streaming.api.checkpoint.ListCheckpointed;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
@@ -30,27 +31,27 @@ import org.apache.flink.streaming.api.functions.source.ParallelSourceFunction;
 import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
 
 /**
  * A simple test that runs a streaming topology with checkpointing enabled.
- * 
- * The test triggers a failure after a while and verifies that, after completion, the
- * state defined with the {@link Checkpointed} interface reflects the "exactly once" semantics.
+ *
+ * <p>The test triggers a failure after a while and verifies that, after completion, the
+ * state defined with the {@link ListCheckpointed} interface reflects the "exactly once" semantics.
  */
 @SuppressWarnings("serial")
 public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 
-	final long NUM_STRINGS = 10_000_000L;
+	static final long NUM_STRINGS = 10_000_000L;
 
 	/**
-	 * Runs the following program:
-	 *
+	 * Runs the following program.
 	 * <pre>
 	 *     [ (source)->(filter) ]-s->[ (map) ] -> [ (map) ] -> [ (groupBy/count)->(sink) ]
 	 * </pre>
@@ -61,15 +62,16 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 
 		stream
 				// -------------- first vertex, chained to the source ----------------
-				.filter(new StringRichFilterFunction()).shuffle()
+				.filter(new StringRichFilterFunction())
+				.shuffle()
 
 				// -------------- seconds vertex - the stateful one that also fails ----------------
 				.map(new StringPrefixCountRichMapFunction())
 				.startNewChain()
 				.map(new StatefulCounterFunction())
 
-						// -------------- third vertex - counter and the sink ----------------
-				.groupBy("prefix")
+				// -------------- third vertex - counter and the sink ----------------
+				.keyBy("prefix")
 				.map(new OnceFailingPrefixCounter(NUM_STRINGS))
 				.addSink(new SinkFunction<PrefixCount>() {
 
@@ -98,7 +100,7 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 		}
 
 		long reduceInputCount = 0;
-		for(long l: OnceFailingPrefixCounter.counts){
+		for (long l: OnceFailingPrefixCounter.counts){
 			reduceInputCount += l;
 		}
 
@@ -115,26 +117,26 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 	// --------------------------------------------------------------------------------------------
 	//  Custom Functions
 	// --------------------------------------------------------------------------------------------
-	
+
 	private static class StringGeneratingSourceFunction extends RichSourceFunction<String>
-			implements  ParallelSourceFunction<String> {
+			implements ParallelSourceFunction<String>, ListCheckpointed<Integer> {
 
 		private final long numElements;
-		
-		private Random rnd;
-		private StringBuilder stringBuilder;
 
-		private OperatorState<Integer> index;
+		private final Random rnd = new Random();
+		private final StringBuilder stringBuilder = new StringBuilder();
+
+		private int index;
 		private int step;
 
-		private volatile boolean isRunning;
+		private volatile boolean isRunning = true;
 
-		static final long[] counts = new long[PARALLELISM];
+		static long[] counts = new long[PARALLELISM];
+
 		@Override
 		public void close() throws IOException {
-			counts[getRuntimeContext().getIndexOfThisSubtask()] = index.value();
+			counts[getRuntimeContext().getIndexOfThisSubtask()] = index;
 		}
-
 
 		StringGeneratingSourceFunction(long numElements) {
 			this.numElements = numElements;
@@ -142,22 +144,18 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 
 		@Override
 		public void open(Configuration parameters) throws IOException {
-			rnd = new Random();
-			stringBuilder = new StringBuilder();
 			step = getRuntimeContext().getNumberOfParallelSubtasks();
-			
-			
-			index = getRuntimeContext().getOperatorState("index", getRuntimeContext().getIndexOfThisSubtask(), false);
-			
-			isRunning = true;
+			if (index == 0) {
+				index = getRuntimeContext().getIndexOfThisSubtask();
+			}
 		}
 
 		@Override
 		public void run(SourceContext<String> ctx) throws Exception {
 			final Object lockingObject = ctx.getCheckpointLock();
 
-			while (isRunning && index.value() < numElements) {
-				char first = (char) ((index.value() % 40) + 40);
+			while (isRunning && index < numElements) {
+				char first = (char) ((index % 40) + 40);
 
 				stringBuilder.setLength(0);
 				stringBuilder.append(first);
@@ -165,7 +163,7 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 				String result = randomString(stringBuilder, rnd);
 
 				synchronized (lockingObject) {
-					index.update(index.value() + step);
+					index += step;
 					ctx.collect(result);
 				}
 			}
@@ -186,12 +184,25 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 
 			return bld.toString();
 		}
+
+		@Override
+		public List<Integer> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.index);
+		}
+
+		@Override
+		public void restoreState(List<Integer> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.index = state.get(0);
+		}
 	}
-	
-	private static class StatefulCounterFunction extends RichMapFunction<PrefixCount, PrefixCount> implements Checkpointed<Long> {
+
+	private static class StatefulCounterFunction extends RichMapFunction<PrefixCount, PrefixCount> implements ListCheckpointed<Long> {
 
 		private long count;
-		static final long[] counts = new long[PARALLELISM];
+		static long[] counts = new long[PARALLELISM];
 
 		@Override
 		public PrefixCount map(PrefixCount value) throws Exception {
@@ -205,35 +216,42 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 		}
 
 		@Override
-		public Long snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			return count;
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.count);
 		}
 
 		@Override
-		public void restoreState(Long state) {
-			count = state;
+		public void restoreState(List<Long> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.count = state.get(0);
 		}
 	}
-	
-	private static class OnceFailingPrefixCounter extends RichMapFunction<PrefixCount, PrefixCount> {
-		
+
+	/**
+	 * This function uses simultaneously the key/value state and is checkpointed.
+	 */
+	private static class OnceFailingPrefixCounter extends RichMapFunction<PrefixCount, PrefixCount>
+			implements ListCheckpointed<Long> {
+
 		private static Map<String, Long> prefixCounts = new ConcurrentHashMap<String, Long>();
-		static final long[] counts = new long[PARALLELISM];
+		static long[] counts = new long[PARALLELISM];
 
 		private static volatile boolean hasFailed = false;
 
 		private final long numElements;
-		
+
 		private long failurePos;
 		private long count;
-		
-		private OperatorState<Long> pCount;
-		private OperatorState<Long> inputCount;
+
+		private ValueState<Long> pCount;
+		private long inputCount;
 
 		OnceFailingPrefixCounter(long numElements) {
 			this.numElements = numElements;
 		}
-		
+
 		@Override
 		public void open(Configuration parameters) throws IOException {
 			long failurePosMin = (long) (0.4 * numElements / getRuntimeContext().getNumberOfParallelSubtasks());
@@ -241,13 +259,13 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 
 			failurePos = (new Random().nextLong() % (failurePosMax - failurePosMin)) + failurePosMin;
 			count = 0;
-			pCount = getRuntimeContext().getOperatorState("prefix-count", 0L, true);
-			inputCount = getRuntimeContext().getOperatorState("input-count", 0L, false);
+
+			pCount = getRuntimeContext().getState(new ValueStateDescriptor<>("pCount", Long.class, 0L));
 		}
-		
+
 		@Override
 		public void close() throws IOException {
-			counts[getRuntimeContext().getIndexOfThisSubtask()] = inputCount.value();
+			counts[getRuntimeContext().getIndexOfThisSubtask()] = inputCount;
 		}
 
 		@Override
@@ -257,21 +275,35 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 				hasFailed = true;
 				throw new Exception("Test Failure");
 			}
-			inputCount.update(inputCount.value() + 1);
-		
+			inputCount++;
+
 			long currentPrefixCount = pCount.value() + value.count;
 			pCount.update(currentPrefixCount);
 			prefixCounts.put(value.prefix, currentPrefixCount);
 			value.count = currentPrefixCount;
 			return value;
 		}
+
+		@Override
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.inputCount);
+		}
+
+		@Override
+		public void restoreState(List<Long> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.inputCount = state.get(0);
+		}
 	}
 
-	private static class StringRichFilterFunction extends RichFilterFunction<String> implements Checkpointed<Long> {
+	private static class StringRichFilterFunction extends RichFilterFunction<String> implements ListCheckpointed<Long> {
 
-		Long count = 0L;
-		static final long[] counts = new long[PARALLELISM];
-		
+		static long[] counts = new long[PARALLELISM];
+
+		private long count;
+
 		@Override
 		public boolean filter(String value) {
 			count++;
@@ -284,47 +316,48 @@ public class StreamCheckpointingITCase extends StreamFaultToleranceTestBase {
 		}
 
 		@Override
-		public Long snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			return count;
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.count);
 		}
 
 		@Override
-		public void restoreState(Long state) {
-			count = state;
+		public void restoreState(List<Long> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.count = state.get(0);
 		}
 	}
 
 	private static class StringPrefixCountRichMapFunction extends RichMapFunction<String, PrefixCount>
-			implements Checkpointed<Integer> {
+			implements ListCheckpointed<Long> {
 
-		OperatorState<Long> count;
-		static final long[] counts = new long[PARALLELISM];
-		
+		static long[] counts = new long[PARALLELISM];
+
+		private long count;
+
 		@Override
 		public PrefixCount map(String value) throws IOException {
-			count.update(count.value() + 1);
+			count++;
 			return new PrefixCount(value.substring(0, 1), value, 1L);
-		}
-		
-		@Override
-		public void open(Configuration conf) throws IOException {
-			this.count = getRuntimeContext().getOperatorState("count", 0L, false);
 		}
 
 		@Override
 		public void close() throws IOException {
-			counts[getRuntimeContext().getIndexOfThisSubtask()] = count.value();
+			counts[getRuntimeContext().getIndexOfThisSubtask()] = count;
 		}
 
 		@Override
-		public Integer snapshotState(long checkpointId, long checkpointTimestamp) throws Exception {
-			return null;
+		public List<Long> snapshotState(long checkpointId, long timestamp) throws Exception {
+			return Collections.singletonList(this.count);
 		}
 
 		@Override
-		public void restoreState(Integer state) {
-			// verify that we never store/restore null state
-			fail();
+		public void restoreState(List<Long> state) throws Exception {
+			if (state.isEmpty() || state.size() > 1) {
+				throw new RuntimeException("Test failed due to unexpected recovered state size " + state.size());
+			}
+			this.count = state.get(0);
 		}
 	}
 }

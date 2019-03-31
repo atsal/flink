@@ -51,9 +51,10 @@ import org.apache.flink.runtime.operators.testutils.DummyInvokable;
 import org.apache.flink.types.Value;
 import org.apache.flink.util.MutableObjectIterator;
 
+import org.apache.flink.util.TestLogger;
 import org.junit.Test;
 
-public class LargeRecordHandlerITCase {
+public class LargeRecordHandlerITCase extends TestLogger {
 
 	@Test
 	public void testRecordHandlerCompositeKey() {
@@ -245,7 +246,6 @@ public class LargeRecordHandlerITCase {
 					channel, memMan, memory, out.getBytesInLatestSegment());
 			
 			for (int i = 0; i < NUM_RECORDS; i++) {
-				System.out.println(i);
 				in.seek(offsets.get(i));
 				Tuple3<Long, SomeVeryLongValue, Byte> next = serializer.deserialize(in);
 				

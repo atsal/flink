@@ -18,7 +18,6 @@
 
 package org.apache.flink.runtime.io.network;
 
-import org.apache.flink.runtime.io.network.buffer.NetworkBufferPool;
 import org.apache.flink.runtime.io.network.netty.PartitionRequestClient;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionProvider;
 
@@ -29,9 +28,7 @@ import org.apache.flink.runtime.io.network.partition.ResultPartitionProvider;
 public class LocalConnectionManager implements ConnectionManager {
 
 	@Override
-	public void start(ResultPartitionProvider partitionProvider,
-						TaskEventDispatcher taskEventDispatcher,
-						NetworkBufferPool networkbufferPool) {
+	public void start(ResultPartitionProvider partitionProvider, TaskEventDispatcher taskEventDispatcher) {
 	}
 
 	@Override
@@ -45,6 +42,11 @@ public class LocalConnectionManager implements ConnectionManager {
 	@Override
 	public int getNumberOfActiveConnections() {
 		return 0;
+	}
+
+	@Override
+	public int getDataPort() {
+		return -1;
 	}
 
 	@Override
