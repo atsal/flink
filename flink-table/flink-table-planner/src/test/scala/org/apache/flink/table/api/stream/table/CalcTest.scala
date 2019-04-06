@@ -21,6 +21,7 @@ package org.apache.flink.table.api.stream.table
 import org.apache.flink.api.scala._
 import org.apache.flink.table.api.scala._
 import org.apache.flink.table.api.Tumble
+import org.apache.flink.table.expressions.utils.{Func1, Func23, Func24}
 import org.apache.flink.table.utils.TableTestBase
 import org.apache.flink.table.utils.TableTestUtil._
 import org.junit.Test
@@ -134,6 +135,113 @@ class CalcTest extends TableTestBase {
       streamTableNode(0),
       term("select", "a", "b", "c"),
       term("where", s"OR(NOT IN(b, ${(1 to 30).mkString(", ")}), <>(c, 'xx'))")
+    )
+
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testAddColumns(): Unit = {
+    val util = streamTestUtil()
+    val sourceTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+    val resultTable = sourceTable
+      .addColumns("concat(c, 'sunny') as kid")
+      .addColumns('a + 2, 'b as 'b2)
+      .addOrReplaceColumns(concat('c, "_kid") as 'kid, concat('c, "kid") as 'kid)
+      .addOrReplaceColumns("concat(c, '_kid_last') as kid")
+      .addColumns("'literal_value'")
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term(
+        "select", "a", "b", "c", "CONCAT(c, '_kid_last') AS kid", "+(a, 2) AS _c4, b AS b2",
+        "'literal_value' AS _c6")
+    )
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testRenameColumns(): Unit = {
+    val util = streamTestUtil()
+    val sourceTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+    val resultTable = sourceTable.renameColumns('a as 'a2, 'b as 'b2).select('a2, 'b2)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term("select", "a AS a2", "b AS b2")
+    )
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testDropColumns(): Unit = {
+    val util = streamTestUtil()
+    val sourceTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+    val resultTable = sourceTable.dropColumns('a, 'b)
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term("select", "c")
+    )
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testSimpleMap(): Unit = {
+    val util = streamTestUtil()
+
+    val resultTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+      .map(Func23('a, 'b, 'c))
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term("select", "Func23$(a, b, c).f0 AS _c0, Func23$(a, b, c).f1 AS _c1, " +
+        "Func23$(a, b, c).f2 AS _c2, Func23$(a, b, c).f3 AS _c3")
+    )
+
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testScalarResult(): Unit = {
+    val util = streamTestUtil()
+
+    val resultTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+      .map(Func1('a))
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term("select", "Func1$(a) AS _c0")
+    )
+
+    util.verifyTable(resultTable, expected)
+  }
+
+  @Test
+  def testMultiMap(): Unit = {
+    val util = streamTestUtil()
+
+    val resultTable = util.addTable[(Int, Long, String)]("MyTable", 'a, 'b, 'c)
+      .map(Func23('a, 'b, 'c))
+      .map(Func24('_c0, '_c1, '_c2, '_c3))
+
+    val expected = unaryNode(
+      "DataStreamCalc",
+      streamTableNode(0),
+      term("select",
+           "Func24$(Func23$(a, b, c).f0, Func23$(a, b, c).f1, " +
+             "Func23$(a, b, c).f2, Func23$(a, b, c).f3).f0 AS _c0, " +
+             "Func24$(Func23$(a, b, c).f0, Func23$(a, b, c).f1, " +
+             "Func23$(a, b, c).f2, Func23$(a, b, c).f3).f1 AS _c1, " +
+             "Func24$(Func23$(a, b, c).f0, Func23$(a, b, c).f1, " +
+             "Func23$(a, b, c).f2, Func23$(a, b, c).f3).f2 AS _c2, " +
+             "Func24$(Func23$(a, b, c).f0, Func23$(a, b, c).f1, " +
+             "Func23$(a, b, c).f2, Func23$(a, b, c).f3).f3 AS _c3")
     )
 
     util.verifyTable(resultTable, expected)
