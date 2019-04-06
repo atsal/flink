@@ -63,7 +63,7 @@ EXIT_CODE=0
 
 # Run actual compile&test steps
 if [ $STAGE == "$STAGE_COMPILE" ]; then
-	MVN="mvn clean install -nsu -Dflink.forkCount=2 -Dflink.forkCountTestPackage=2 -Dmaven.javadoc.skip=true -B -DskipTests $PROFILE"
+	MVN="mvn clean install -nsu -Dflink.forkCount=2 -Dflink.forkCountTestPackage=2 -Dmaven.javadoc.skip=true -Drat.skip=true' -B -DskipTests $PROFILE"
 	$MVN
 	EXIT_CODE=$?
 
